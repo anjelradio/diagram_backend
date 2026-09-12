@@ -6,13 +6,11 @@
 # Cada vez que agregues un nuevo módulo con tablas SQLModel,
 # importa su modelo en este archivo.  Eso es todo lo que
 # necesitas para que `alembic revision --autogenerate` lo detecte.
-#
-# Ejemplo:
-#   from app.modules.users.infrastructure.persistence.models.profile_model import ProfileModel
-#   from app.modules.orders.infrastructure.persistence.models.order_model import OrderModel
-#
-# ⚠️  No importes aquí lógica de negocio ni servicios;
-#     solo los modelos que heredan de SQLModel con table=True.
 # ============================================================
 
 # ruff: noqa: F401
+
+# Módulo Projects
+from app.modules.projects.infrastructure.persistence.models.project_model import ProjectModel
+from app.modules.projects.infrastructure.persistence.models.invitation_model import InvitationModel
+from app.modules.projects.infrastructure.persistence.models.project_member_model import ProjectMemberModel

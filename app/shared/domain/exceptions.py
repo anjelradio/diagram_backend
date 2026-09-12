@@ -31,3 +31,10 @@ class ConflictException(DomainException):
     """Mapea a HTTP 409 (Conflict)."""
 
     code = "CONFLICT_ERROR"
+
+
+class ForbiddenException(DomainException):
+    """Mapea a HTTP 403 (Forbidden)."""
+
+    code = "FORBIDDEN"
+

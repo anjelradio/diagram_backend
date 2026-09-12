@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(default="sqlite:///./dev.db", env="DATABASE_URL")
     SQL_ECHO: bool = Field(default=False, env="SQL_ECHO")
 
+    # ── Módulo Projects ───────────────────────────────────────────────────────
+    INVITATION_EXPIRATION_DAYS: int = Field(
+        default=3, gt=0, env="INVITATION_EXPIRATION_DAYS"
+    )
+
     # ── JWT / Auth ────────────────────────────────────────────────────────────
     # BETTER_AUTH_SECRET ya NO se usa para verificar JWTs.
     # La verificación cambió de HS256 + secret compartido a EdDSA + JWKS:

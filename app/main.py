@@ -20,11 +20,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# IMPORTACIONES DE ROUTERS (descomenta cuando crees los módulos)
-# ==============================================================================
-# from app.modules.module_a.infrastructure.api.routers.module_a_router import router as module_a_router
-# from app.modules.module_b.infrastructure.api.routers.module_b_router import router as module_b_router
+from app.modules.projects.infrastructure.api.routers.project_members_router import (
+    router as project_members_router,
+)
+from app.modules.projects.infrastructure.api.routers.projects_router import (
+    router as projects_router,
+)
 
 
 # ==============================================================================
@@ -116,7 +117,7 @@ def health_check():
 
 
 # ==============================================================================
-# REGISTRO DE ROUTERS (descomenta según vayas agregando módulos)
+# REGISTRO DE ROUTERS
 # ==============================================================================
-# app.include_router(module_a_router, prefix="/api/module-a", tags=["Module A"])
-# app.include_router(module_b_router, prefix="/api/module-b", tags=["Module B"])
+app.include_router(projects_router, prefix="/api")
+app.include_router(project_members_router, prefix="/api")

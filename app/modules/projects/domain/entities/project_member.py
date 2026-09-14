@@ -111,3 +111,10 @@ class ProjectMember:
 
     def is_removed(self) -> bool:
         return self.status == ProjectMemberStatus.REMOVED
+
+    def is_editor(self) -> bool:
+        return self.role == ProjectMemberRole.EDITOR
+
+    def is_reader(self) -> bool:
+        return self.role == ProjectMemberRole.READER
+

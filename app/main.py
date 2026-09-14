@@ -1,5 +1,6 @@
 # app/main.py
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, status
@@ -26,6 +27,19 @@ from app.modules.projects.infrastructure.api.routers.project_members_router impo
 from app.modules.projects.infrastructure.api.routers.projects_router import (
     router as projects_router,
 )
+from app.modules.diagram.infrastructure.api.routers.diagram_router import (
+    router as diagram_router,
+)
+from app.modules.diagram.infrastructure.api.routers.diagram_ws_router import (
+    ws_router as diagram_ws_router,
+)
+from app.modules.diagram.infrastructure.realtime.broadcast_handler import (
+    configure_broadcast_loop,
+)
+from app.modules.diagram.infrastructure.realtime.connection_manager import (
+    connection_manager,
+)
+
 
 
 # ==============================================================================
@@ -51,10 +65,20 @@ async def lifespan(app: FastAPI):
         )
 
     # ── Event Bus — registrar suscripciones de handlers ────────────────────
+    configure_broadcast_loop(asyncio.get_running_loop())
     configure_event_subscriptions(get_event_bus())
     logger.info("Event Bus configurado con suscripciones del sistema.")
-
-    yield
+    monitor_task = asyncio.create_task(
+        connection_manager.monitor_stale_connections()
+    )
+    try:
+        yield
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
 
 
 # ==============================================================================
@@ -121,3 +145,5 @@ def health_check():
 # ==============================================================================
 app.include_router(projects_router, prefix="/api")
 app.include_router(project_members_router, prefix="/api")
+app.include_router(diagram_router, prefix="/api")
+app.include_router(diagram_ws_router, prefix="/api")

@@ -1,6 +1,22 @@
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole
+
+
+class ProjectDetailResponse(BaseModel):
+    """Representación detallada de un proyecto accesible con su rol resuelto."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID = Field(description="Identificador único del proyecto")
+    name: str = Field(description="Nombre del proyecto")
+    description: str | None = Field(default=None, description="Descripción opcional del proyecto")
+    thumbnail_url: str | None = Field(default=None, description="URL opcional de miniatura del proyecto")
+    access_role: ProjectAccessRole = Field(
+        description="Rol de acceso resuelto para el usuario autenticado (OWNER, EDITOR o READER)"
+    )
+
 
 class ProjectCreatedResponse(BaseModel):
     """Respuesta al crear un proyecto exitosamente."""

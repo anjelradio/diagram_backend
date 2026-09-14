@@ -76,7 +76,9 @@ def test_list_projects_own_and_shared(client, session: Session):
         status=ProjectMemberStatus.BANNED.value,
     )
 
-    session.add_all([p1, p_deleted, p2, member_active, p3, member_removed, p4, member_banned])
+    session.add_all([p1, p_deleted, p2, p3, p4])
+    session.flush()
+    session.add_all([member_active, member_removed, member_banned])
     session.commit()
 
     response = client.get("/api/projects")

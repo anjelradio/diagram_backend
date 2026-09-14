@@ -11,6 +11,8 @@ from app.main import app
 from app.shared.infrastructure.db.better_auth import BetterAuthUser
 
 
+from sqlalchemy import event
+
 @pytest.fixture(name="test_engine")
 def test_engine_fixture():
     engine = create_engine(
@@ -18,6 +20,13 @@ def test_engine_fixture():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     SQLModel.metadata.create_all(engine)
     yield engine
     SQLModel.metadata.drop_all(engine)

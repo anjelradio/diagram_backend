@@ -6,6 +6,9 @@ from app.modules.projects.application.queries.project_member.list_project_member
     ListProjectMembersQuery,
     ListProjectMembersQueryHandler,
 )
+from app.modules.projects.application.services.project_access_policy import (
+    ProjectAccessPolicy,
+)
 from app.modules.projects.application.use_cases.project_member.ban_project_member import (
     BanProjectMemberCommand,
     BanProjectMemberUseCase,
@@ -58,9 +61,14 @@ def list_project_members(
 ) -> MemberListResponse:
     """Retorna los colaboradores del proyecto con sus datos de usuario, filtrables por estado."""
     project_repo = SQLModelProjectRepository(db)
+    member_repo = SQLModelProjectMemberRepository(db)
+    access_policy = ProjectAccessPolicy(
+        project_repository=project_repo,
+        project_member_repository=member_repo,
+    )
     reader = SQLModelProjectMemberListReader(db)
     handler = ListProjectMembersQueryHandler(
-        project_repository=project_repo,
+        access_policy=access_policy,
         project_member_list_reader=reader,
     )
     query = ListProjectMembersQuery(

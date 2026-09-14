@@ -14,3 +14,10 @@
 from app.modules.projects.infrastructure.persistence.models.project_model import ProjectModel
 from app.modules.projects.infrastructure.persistence.models.invitation_model import InvitationModel
 from app.modules.projects.infrastructure.persistence.models.project_member_model import ProjectMemberModel
+
+# Módulo Diagram
+from app.modules.diagram.infrastructure.persistence.models.diagram_class_model import DiagramClassModel
+from app.modules.diagram.infrastructure.persistence.models.diagram_attribute_model import DiagramAttributeModel
+from app.modules.diagram.infrastructure.persistence.models.diagram_relation_model import DiagramRelationModel
+
+

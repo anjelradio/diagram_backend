@@ -29,9 +29,21 @@ def test_manage_members_lifecycle(client, session: Session):
     assert resp_join.status_code == 200
 
 
-    # 4. Usuario 2 (no propietario) intenta listar miembros -> 403
-    resp_list_forbidden = client.get(f"/api/projects/{project_id}/members")
-    assert resp_list_forbidden.status_code == 403
+    # 4. Usuario 2 (colaborador READER activo) lista miembros activos exitosamente
+    resp_list_reader = client.get(f"/api/projects/{project_id}/members")
+    assert resp_list_reader.status_code == 200
+    assert len(resp_list_reader.json()["items"]) == 1
+
+    # Usuario 2 (READER) con filtro explícito ACTIVE -> 200
+    resp_list_reader_active = client.get(f"/api/projects/{project_id}/members?status_filter=ACTIVE")
+    assert resp_list_reader_active.status_code == 200
+
+    # Usuario 2 (READER) intenta consultar filtros históricos reservados al owner -> 403 Forbidden
+    resp_filter_removed_forbidden = client.get(f"/api/projects/{project_id}/members?status_filter=REMOVED")
+    assert resp_filter_removed_forbidden.status_code == 403
+
+    resp_filter_banned_forbidden = client.get(f"/api/projects/{project_id}/members?status_filter=BANNED")
+    assert resp_filter_banned_forbidden.status_code == 403
 
     # 5. Usuario 1 (propietario) lista miembros
     app.dependency_overrides[get_current_user] = lambda: user1
@@ -59,12 +71,23 @@ def test_manage_members_lifecycle(client, session: Session):
     assert resp_members_after_role.status_code == 200
     assert resp_members_after_role.json()["items"][0]["role"] == ProjectMemberRole.EDITOR.value
 
-    # Degradar a READER (sin body)
+    # Usuario 2 (ahora EDITOR) puede listar miembros activos pero no consultar históricos
+    app.dependency_overrides[get_current_user] = lambda: user2
+    resp_list_editor = client.get(f"/api/projects/{project_id}/members")
+    assert resp_list_editor.status_code == 200
+    assert len(resp_list_editor.json()["items"]) == 1
+
+    resp_editor_historical_forbidden = client.get(f"/api/projects/{project_id}/members?status_filter=REMOVED")
+    assert resp_editor_historical_forbidden.status_code == 403
+
+    # Degradar a READER (solo owner puede mutar roles)
+    app.dependency_overrides[get_current_user] = lambda: user1
     resp_demote = client.post(f"/api/projects/{project_id}/members/{member_id}/demote")
     assert resp_demote.status_code == 204
 
     # Verificar que el rol regresó a READER
     resp_members_demoted = client.get(f"/api/projects/{project_id}/members")
+    assert resp_members_demoted.status_code == 200
     assert resp_members_demoted.json()["items"][0]["role"] == ProjectMemberRole.READER.value
 
     # 7. Usuario 2 intenta promover o degradar -> 403
@@ -89,10 +112,12 @@ def test_manage_members_lifecycle(client, session: Session):
     assert resp_removed.status_code == 200
     assert len(resp_removed.json()["items"]) == 1
 
-    # Usuario 2 no ve el proyecto en su lista
+    # Usuario 2 no ve el proyecto en su lista y recibe 404 al consultar miembros
     app.dependency_overrides[get_current_user] = lambda: user2
     resp_list_user2 = client.get("/api/projects")
     assert len(resp_list_user2.json()["items"]) == 0
+    resp_members_removed_forbidden = client.get(f"/api/projects/{project_id}/members")
+    assert resp_members_removed_forbidden.status_code == 404
 
     # 9. Usuario 1 bloquea a Usuario 2 (sin body)
     app.dependency_overrides[get_current_user] = lambda: user1
@@ -108,10 +133,12 @@ def test_manage_members_lifecycle(client, session: Session):
     resp_promote_banned = client.post(f"/api/projects/{project_id}/members/{member_id}/promote")
     assert resp_promote_banned.status_code == 409
 
-    # Usuario 2 intenta reingresar -> 403 Forbidden
+    # Usuario 2 intenta reingresar -> 403 Forbidden y 404 al consultar miembros
     app.dependency_overrides[get_current_user] = lambda: user2
     resp_join_banned = client.post("/api/projects/join", json={"code": code})
     assert resp_join_banned.status_code == 403
+    resp_members_banned_forbidden = client.get(f"/api/projects/{project_id}/members")
+    assert resp_members_banned_forbidden.status_code == 404
 
     # 10. Usuario 1 desbanea a Usuario 2 (sin body)
     app.dependency_overrides[get_current_user] = lambda: user1

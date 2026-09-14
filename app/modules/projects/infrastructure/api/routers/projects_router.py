@@ -3,9 +3,16 @@ from fastapi import APIRouter, status, Response
 
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, DBSession, UoWDep
+from app.modules.projects.application.queries.project.get_project import (
+    GetProjectQuery,
+    GetProjectQueryHandler,
+)
 from app.modules.projects.application.queries.project.list_projects import (
     ListProjectsQuery,
     ListProjectsQueryHandler,
+)
+from app.modules.projects.application.services.project_access_policy import (
+    ProjectAccessPolicy,
 )
 from app.modules.projects.application.use_cases.invitation.create_or_refresh_invitation import (
     CreateOrRefreshInvitationCommand,
@@ -34,6 +41,7 @@ from app.modules.projects.infrastructure.api.schemas.invitation_schemas import (
 )
 from app.modules.projects.infrastructure.api.schemas.project_schemas import (
     ProjectCreatedResponse,
+    ProjectDetailResponse,
     ProjectItemResponse,
     ProjectListResponse,
     UpdateProjectRequest,
@@ -101,6 +109,42 @@ def list_projects(
             )
             for item in dto.items
         ]
+    )
+
+
+@router.get(
+    "/{project_id}",
+    response_model=ProjectDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Obtener un proyecto y su rol de acceso resuelto",
+)
+def get_project(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DBSession,
+) -> ProjectDetailResponse:
+    """Retorna los datos del proyecto y el rol resuelto (OWNER, EDITOR, READER).
+
+    Si el proyecto no existe, está eliminado lógicamente o el usuario no tiene acceso activo,
+    falla cerrado retornando 404 (ProjectNotFoundException).
+    """
+    project_repo = SQLModelProjectRepository(db)
+    member_repo = SQLModelProjectMemberRepository(db)
+    access_policy = ProjectAccessPolicy(
+        project_repository=project_repo,
+        project_member_repository=member_repo,
+    )
+    handler = GetProjectQueryHandler(access_policy=access_policy)
+    dto = handler.execute(
+        GetProjectQuery(project_id=project_id, user_id=current_user.user_id)
+    )
+
+    return ProjectDetailResponse(
+        id=dto.id,
+        name=dto.name,
+        description=dto.description,
+        thumbnail_url=dto.thumbnail_url,
+        access_role=dto.access_role,
     )
 
 

@@ -4,14 +4,14 @@ from uuid import UUID
 from app.modules.projects.application.ports.readers.project_member_list_reader import (
     ProjectMemberListReader,
 )
+from app.modules.projects.application.services.project_access_policy import (
+    ProjectAccessPolicy,
+)
+from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole
 from app.modules.projects.domain.enums.project_member_role import ProjectMemberRole
 from app.modules.projects.domain.enums.project_member_status import ProjectMemberStatus
 from app.modules.projects.domain.exceptions import (
-    ProjectNotFoundException,
     ProjectNotOwnedException,
-)
-from app.modules.projects.domain.repositories.project_repository import (
-    ProjectRepository,
 )
 
 
@@ -45,27 +45,29 @@ class ProjectMemberListDTO:
 
 
 class ListProjectMembersQueryHandler:
-    """Manejador de consulta para listar colaboradores de un proyecto con verificación de propiedad."""
+    """Manejador de consulta para listar colaboradores con control de acceso por rol."""
 
     def __init__(
         self,
-        project_repository: ProjectRepository,
+        access_policy: ProjectAccessPolicy,
         project_member_list_reader: ProjectMemberListReader,
     ) -> None:
-        self.project_repository = project_repository
+        self.access_policy = access_policy
         self.project_member_list_reader = project_member_list_reader
 
     def execute(self, query: ListProjectMembersQuery) -> ProjectMemberListDTO:
-        project = self.project_repository.find_by_id(query.project_id)
-        if project is None:
-            raise ProjectNotFoundException()
+        context = self.access_policy.resolve_access(query.project_id, query.user_id)
 
-        if not project.is_owner(query.user_id):
-            raise ProjectNotOwnedException()
+        if context.access_role == ProjectAccessRole.OWNER:
+            status_filter = query.status
+        else:
+            if query.status is not None and query.status != ProjectMemberStatus.ACTIVE:
+                raise ProjectNotOwnedException()
+            status_filter = ProjectMemberStatus.ACTIVE
 
         items = self.project_member_list_reader.list_members(
             project_id=query.project_id,
-            status=query.status,
+            status=status_filter,
         )
 
         member_dtos = tuple(

@@ -33,6 +33,9 @@ from app.modules.diagram.infrastructure.api.routers.diagram_router import (
 from app.modules.diagram.infrastructure.api.routers.diagram_ws_router import (
     ws_router as diagram_ws_router,
 )
+from app.modules.assistant.infrastructure.api.routers.assistant_router import (
+    router as assistant_router,
+)
 from app.modules.diagram.infrastructure.realtime.broadcast_handler import (
     configure_broadcast_loop,
 )
@@ -147,3 +150,4 @@ app.include_router(projects_router, prefix="/api")
 app.include_router(project_members_router, prefix="/api")
 app.include_router(diagram_router, prefix="/api")
 app.include_router(diagram_ws_router, prefix="/api")
+app.include_router(assistant_router, prefix="/api")

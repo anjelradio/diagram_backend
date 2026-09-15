@@ -20,6 +20,16 @@ class ProjectRoomState:
         self.project_id = project_id
         self.lock_ttl_seconds = lock_ttl_seconds
         self.class_locks: dict[UUID, ClassLock] = {}
+        self.agent_lock: dict[str, str] | None = None
+
+    def set_agent_lock(self, user_id: str, activity_id: UUID) -> None:
+        self.agent_lock = {"user_id": user_id, "activity_id": str(activity_id)}
+
+    def release_agent_lock(self, activity_id: UUID) -> bool:
+        if self.agent_lock is None or self.agent_lock["activity_id"] != str(activity_id):
+            return False
+        self.agent_lock = None
+        return True
 
     def acquire_lock(
         self,
@@ -70,6 +80,8 @@ class ProjectRoomState:
                 "class_id": str(lock.class_id),
                 "user_id": lock.user_id,
                 "user_name": lock.user_name,
+                "locked_at": lock.locked_at,
+                "expires_at": lock.expires_at,
             }
             for lock in self.class_locks.values()
         ]

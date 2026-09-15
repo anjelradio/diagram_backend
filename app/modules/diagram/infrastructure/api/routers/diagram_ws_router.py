@@ -42,7 +42,7 @@ async def diagram_websocket(
         websocket=websocket,
         project_id=project_id,
         user_id=user.user_id,
-        user_name=user.email or user.user_id,
+        user_name=user.name or user.user_id,
         role=role,
         rate_limiter=CursorRateLimiter(),
     )
@@ -62,17 +62,17 @@ async def diagram_websocket(
                 continue
 
             if isinstance(message, CursorMoveMessage):
-                if access.access_role == ProjectAccessRole.READER or not session.rate_limiter.allow():
+                if session.role == ProjectAccessRole.READER.value or not session.rate_limiter.allow():
                     continue
                 await connection_manager.broadcast(
                     project_id,
-                    {"type": "cursor_moved", "user_id": user.user_id, "x": message.x, "y": message.y},
+                    {"type": "cursor_moved", "user_id": user.user_id, "user_name": session.user_name, "x": message.x, "y": message.y},
                     exclude_user_id=user.user_id,
                 )
                 continue
 
             if isinstance(message, ClassDragMessage):
-                if access.access_role == ProjectAccessRole.READER or not session.rate_limiter.allow():
+                if session.role == ProjectAccessRole.READER.value or not session.rate_limiter.allow():
                     continue
                 room = connection_manager.rooms.get(project_id)
                 lock = room.class_locks.get(message.class_id) if room else None
@@ -81,7 +81,7 @@ async def diagram_websocket(
                 lock.expires_at = session.last_heartbeat + (room.lock_ttl_seconds if room else 60.0)
                 await connection_manager.broadcast(
                     project_id,
-                    {"type": "class_dragged", "class_id": str(message.class_id), "x": message.x, "y": message.y, "user_id": user.user_id},
+                    {"type": "class_dragged", "class_id": str(message.class_id), "x": message.x, "y": message.y, "user_id": user.user_id, "user_name": session.user_name},
                     exclude_user_id=user.user_id,
                 )
                 continue
@@ -90,15 +90,28 @@ async def diagram_websocket(
             if room is None:
                 continue
             if isinstance(message, ClassLockAcquireMessage):
-                if access.access_role == ProjectAccessRole.READER:
+                if session.role == ProjectAccessRole.READER.value:
                     continue
                 lock = room.acquire_lock(message.class_id, user.user_id, session.user_name)
                 if lock is None:
-                    await websocket.send_json({"type": "class_lock_denied", "class_id": str(message.class_id)})
+                    owner = connection_manager.lock_owner(project_id, message.class_id)
+                    await websocket.send_json({
+                        "type": "class_lock_denied",
+                        "class_id": str(message.class_id),
+                        "user_id": owner.user_id if owner else None,
+                        "user_name": owner.user_name if owner else None,
+                    })
                 else:
                     await connection_manager.broadcast(
                         project_id,
-                        {"type": "class_locked", "class_id": str(lock.class_id), "user_id": lock.user_id, "user_name": lock.user_name},
+                        {
+                            "type": "class_locked",
+                            "class_id": str(lock.class_id),
+                            "user_id": lock.user_id,
+                            "user_name": lock.user_name,
+                            "locked_at": lock.locked_at,
+                            "expires_at": lock.expires_at,
+                        },
                     )
                 continue
 

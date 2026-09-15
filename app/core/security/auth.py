@@ -75,11 +75,13 @@ class AuthUser:
     Campos:
         user_id → claim "sub" del JWT (ID del usuario en Better Auth)
         email   → claim "email" del JWT
+        name    → claim "name" del JWT
         role    → claim "role" del JWT (None si BETTER_AUTH_ENABLE_ROLES=False)
     """
 
     user_id: str
     email: str
+    name: str = ""
     role: Role | str | None = None
 
     def has_role(self, *roles: Role | str) -> bool:
@@ -159,6 +161,7 @@ def get_current_user(
 
     user_id = payload.get("sub")
     email = payload.get("email")
+    name = payload.get("name")
 
     if not isinstance(user_id, str) or not user_id:
         raise APIHTTPException(
@@ -190,6 +193,7 @@ def get_current_user(
     return AuthUser(
         user_id=user_id,
         email=email if isinstance(email, str) else "",
+        name=name if isinstance(name, str) and name.strip() else user_id,
         role=role,
     )
 

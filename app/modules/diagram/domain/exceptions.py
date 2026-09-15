@@ -15,6 +15,13 @@ class DiagramWriteForbiddenException(ForbiddenException):
     message = "No tienes permisos de edición en este lienzo."
 
 
+class DiagramAgentLockedException(ConflictException):
+    """El lienzo está reservado por una actividad activa del asistente."""
+
+    code = "DIAGRAM_AGENT_LOCKED"
+    message = "El lienzo está siendo actualizado por el asistente. Inténtalo de nuevo cuando termine."
+
+
 class DiagramClassNotFoundException(NotFoundException):
     """La clase de diagrama solicitada no existe."""
 
@@ -191,4 +198,3 @@ class BridgeClassCannotBeDeletedDirectlyException(ConflictException):
 
     code = "BRIDGE_CLASS_CANNOT_BE_DELETED_DIRECTLY"
     message = "Una clase puente solo puede eliminarse a través de su relación propietaria."
-

@@ -6,7 +6,7 @@ import time
 class CursorRateLimiter:
     """Token bucket por conexión; permite ráfagas pequeñas sin saturar la sala."""
 
-    def __init__(self, rate: float = 30.0, burst: int = 30) -> None:
+    def __init__(self, rate: float = 75.0, burst: int = 75) -> None:
         self.rate = rate
         self.capacity = float(burst)
         self.tokens = float(burst)

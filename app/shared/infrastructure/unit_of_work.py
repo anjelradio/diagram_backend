@@ -105,6 +105,10 @@ class SqlModelUnitOfWork:
             self._tracked_aggregates.clear()
             self._pending_events.clear()
 
+    def flush(self) -> None:
+        """Sincroniza la transacción actual sin confirmarla ni publicar eventos."""
+        self.session.flush()
+
     def rollback(self) -> None:
         """
         Revierte los cambios pendientes y limpia el estado del UoW.

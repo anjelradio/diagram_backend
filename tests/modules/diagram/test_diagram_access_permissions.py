@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import Mock
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -7,7 +8,30 @@ from app.main import app
 from app.modules.projects.infrastructure.persistence.models.project_model import (
     ProjectModel,
 )
+from app.modules.diagram.application.services.diagram_access_policy import DiagramAccessPolicy
+from app.modules.diagram.domain.exceptions import DiagramAgentLockedException
+from app.modules.projects.domain.entities.project import Project
 from tests.modules.diagram.conftest import create_test_attribute, create_test_class
+
+
+def test_diagram_write_guard_blocks_active_agent_but_allows_internal_bypass() -> None:
+    project_id = uuid.uuid4()
+    project = Project(id=project_id, owner_id="owner", name="Proyecto")
+    projects = Mock()
+    projects.find_by_id.return_value = project
+    members = Mock()
+    active_reader = Mock()
+    active_reader.find_active_by_project_id.return_value = object()
+    policy = DiagramAccessPolicy(projects, members, active_activity_reader=active_reader)
+
+    try:
+        policy.ensure_write_access(project_id, "owner")
+    except DiagramAgentLockedException:
+        pass
+    else:
+        raise AssertionError("Una actividad activa debe bloquear mutaciones humanas")
+
+    policy.for_agent().ensure_write_access(project_id, "owner")
 
 
 def test_diagram_full_access_permissions_matrix(

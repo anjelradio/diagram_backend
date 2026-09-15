@@ -57,9 +57,13 @@ def parse_client_message(payload: object) -> ClientIncomingMessage:
     return client_message_adapter.validate_python(payload)
 
 
-def presence_snapshot(sessions: list[dict[str, object]], locks: list[dict[str, object]]) -> dict[str, object]:
+def presence_snapshot(
+    sessions: list[dict[str, object]],
+    locks: list[dict[str, object]],
+    agent_lock: dict[str, str] | None = None,
+) -> dict[str, object]:
     """Construye el mensaje de presencia inicial de una sala."""
-    return {"type": "presence_snapshot", "peers": sessions, "class_locks": locks}
+    return {"type": "presence_snapshot", "peers": sessions, "class_locks": locks, "agent_lock": agent_lock}
 
 
 def diagram_mutation(operation_type: str, data: dict[str, object], sender_id: str) -> dict[str, object]:

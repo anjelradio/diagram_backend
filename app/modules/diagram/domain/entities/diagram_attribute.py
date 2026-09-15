@@ -124,17 +124,23 @@ class DiagramAttribute:
 
     @classmethod
     def create_secondary(
-        cls, id: UUID, class_id: UUID, name: str, position: int
+        cls,
+        id: UUID,
+        class_id: UUID,
+        name: str,
+        position: int,
+        data_type: DiagramAttributeDataType | None = None,
+        is_nullable: bool = True,
     ) -> "DiagramAttribute":
         """Crea un atributo secundario con tipo null por defecto y nullable."""
         return cls(
             id=id,
             class_id=class_id,
             name=name,
-            data_type=None,
+            data_type=data_type,
             position=position,
             is_primary_key=False,
-            is_nullable=True,
+            is_nullable=is_nullable,
             is_foreign_key=False,
             referenced_class_id=None,
             relation_id=None,

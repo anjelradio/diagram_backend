@@ -54,6 +54,9 @@ from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagra
 from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_class_repository import (
     SQLModelDiagramClassRepository,
 )
+from app.modules.diagram.infrastructure.api.dependencies.class_lock import (
+    ensure_class_is_editable,
+)
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
     SQLModelProjectMemberRepository,
 )
@@ -205,6 +208,7 @@ def move_diagram_class(
     project_repo = SQLModelProjectRepository(db)
     member_repo = SQLModelProjectMemberRepository(db)
     diagram_repo = SQLModelDiagramClassRepository(db)
+    ensure_class_is_editable(diagram_repo, class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -239,6 +243,7 @@ def rename_diagram_class(
     project_repo = SQLModelProjectRepository(db)
     member_repo = SQLModelProjectMemberRepository(db)
     diagram_repo = SQLModelDiagramClassRepository(db)
+    ensure_class_is_editable(diagram_repo, class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -273,6 +278,7 @@ def delete_diagram_class(
     diagram_repo = SQLModelDiagramClassRepository(db)
     diagram_relation_repo = SQLModelDiagramRelationRepository(db)
     diagram_attr_repo = SQLModelDiagramAttributeRepository(db)
+    ensure_class_is_editable(diagram_repo, class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -327,6 +333,7 @@ def create_diagram_attribute(
     member_repo = SQLModelProjectMemberRepository(db)
     diagram_class_repo = SQLModelDiagramClassRepository(db)
     diagram_attr_repo = SQLModelDiagramAttributeRepository(db)
+    ensure_class_is_editable(diagram_class_repo, class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -379,6 +386,9 @@ def update_diagram_attribute(
     member_repo = SQLModelProjectMemberRepository(db)
     diagram_class_repo = SQLModelDiagramClassRepository(db)
     diagram_attr_repo = SQLModelDiagramAttributeRepository(db)
+    existing_attribute = diagram_attr_repo.find_by_id(attribute_id)
+    if existing_attribute is not None:
+        ensure_class_is_editable(diagram_class_repo, existing_attribute.class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -425,6 +435,9 @@ def reposition_diagram_attribute(
     member_repo = SQLModelProjectMemberRepository(db)
     diagram_class_repo = SQLModelDiagramClassRepository(db)
     diagram_attr_repo = SQLModelDiagramAttributeRepository(db)
+    existing_attribute = diagram_attr_repo.find_by_id(attribute_id)
+    if existing_attribute is not None:
+        ensure_class_is_editable(diagram_class_repo, existing_attribute.class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -465,6 +478,9 @@ def delete_diagram_attribute(
     member_repo = SQLModelProjectMemberRepository(db)
     diagram_class_repo = SQLModelDiagramClassRepository(db)
     diagram_attr_repo = SQLModelDiagramAttributeRepository(db)
+    existing_attribute = diagram_attr_repo.find_by_id(attribute_id)
+    if existing_attribute is not None:
+        ensure_class_is_editable(diagram_class_repo, existing_attribute.class_id, current_user.user_id)
 
     policy = DiagramAccessPolicy(
         project_repository=project_repo,
@@ -625,4 +641,3 @@ def delete_diagram_relation(
     )
     use_case.execute(command)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

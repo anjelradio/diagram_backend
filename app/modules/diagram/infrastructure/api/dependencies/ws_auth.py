@@ -42,9 +42,11 @@ def get_ws_auth_user(websocket: WebSocket) -> AuthUser:
     user_id = payload.get("sub")
     if not isinstance(user_id, str) or not user_id:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    name = payload.get("name")
     return AuthUser(
         user_id=user_id,
         email=payload.get("email") if isinstance(payload.get("email"), str) else "",
+        name=name if isinstance(name, str) and name.strip() else user_id,
         role=payload.get("role") if isinstance(payload.get("role"), str) else None,
     )
 
@@ -62,8 +64,5 @@ def get_ws_project_access(
     try:
         return policy.resolve_access(project_id, user.user_id)
     except Exception as exc:
-        from app.modules.projects.domain.exceptions import ProjectNotFoundException
-
-        if isinstance(exc, ProjectNotFoundException):
-            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
-        raise
+        # No se revela si el proyecto existe ni el motivo de la denegación.
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION) from exc

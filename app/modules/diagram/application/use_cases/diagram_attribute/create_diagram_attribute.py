@@ -5,6 +5,7 @@ from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
 from app.modules.diagram.domain.entities.diagram_attribute import DiagramAttribute
+from app.modules.diagram.domain.enums.diagram_attribute_data_type import DiagramAttributeDataType
 from app.modules.diagram.domain.exceptions import (
     DiagramAttributeIdConflictException,
     DiagramClassNotFoundException,
@@ -29,6 +30,8 @@ class CreateDiagramAttributeCommand:
     user_id: str
     name: str
     position: int
+    data_type: DiagramAttributeDataType | None = None
+    is_nullable: bool = True
 
 
 class CreateDiagramAttributeUseCase:
@@ -101,6 +104,8 @@ class CreateDiagramAttributeUseCase:
             class_id=command.class_id,
             name=clean_name,
             position=command.position,
+            data_type=command.data_type,
+            is_nullable=command.is_nullable,
         )
 
         # 7. Persistir y confirmar transacción

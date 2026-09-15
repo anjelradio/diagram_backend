@@ -74,7 +74,12 @@ class Settings(BaseSettings):
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"],
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
         env="CORS_ORIGINS",
     )
 
@@ -84,6 +89,33 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [o.strip() for o in value.split(",") if o.strip()]
         return value  # type: ignore[return-value]
+
+    # ── Asistente IA (Gemini) ─────────────────────────────────────────────────
+    GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
+    GEMINI_MODEL_CHAIN: list[str] | str = Field(
+        default_factory=lambda: [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+        ],
+        env="GEMINI_MODEL_CHAIN",
+    )
+    GEMINI_MAX_RETRY_CYCLES: int = Field(
+        default=1, ge=1, env="GEMINI_MAX_RETRY_CYCLES"
+    )
+
+    @field_validator("GEMINI_MODEL_CHAIN", mode="after")
+    @classmethod
+    def parse_gemini_models(cls, value: object) -> list[str]:
+        if isinstance(value, str):
+            return [m.strip() for m in value.split(",") if m.strip()]
+        return value  # type: ignore[return-value]
+
+    # ── Cloudinary (Almacenamiento de imágenes) ────────────────────────────────
+    CLOUDINARY_CLOUD_NAME: str = Field(default="", env="CLOUDINARY_CLOUD_NAME")
+    CLOUDINARY_API_KEY: str = Field(default="", env="CLOUDINARY_API_KEY")
+    CLOUDINARY_API_SECRET: str = Field(default="", env="CLOUDINARY_API_SECRET")
 
     @property
     def database_url_normalized(self) -> str:

@@ -39,7 +39,7 @@ from app.modules.diagram.domain.repositories.diagram_class_repository import (
 from app.modules.diagram.domain.repositories.diagram_relation_repository import (
     DiagramRelationRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramRelationCreatedEvent
 
 
@@ -70,7 +70,7 @@ class CreateDiagramRelationUseCase:
         diagram_class_repository: DiagramClassRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
         diagram_relation_repository: DiagramRelationRepository,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_class_repository = diagram_class_repository
@@ -200,7 +200,7 @@ class CreateDiagramRelationUseCase:
             bridge_handle=bridge_handle,
         )
         self.diagram_relation_repository.save(relation)
-        self.uow.session.flush()
+        self.uow.flush()
 
         # Ahora persistir los atributos (PK y FK) que referencian a relation_id
         if plan.strategy == MaterializationStrategy.BRIDGE_CLASS:

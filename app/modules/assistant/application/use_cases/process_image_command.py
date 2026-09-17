@@ -7,6 +7,9 @@ from sqlalchemy.exc import IntegrityError
 from app.modules.assistant.application.ports.providers.ai_provider import (
     AiProvider,
 )
+from app.modules.assistant.application.ports.providers.image_storage_provider import (
+    ImageStorageProvider,
+)
 from app.modules.assistant.application.services.action_executor import (
     ActionExecutor,
     AtomicBatchUnitOfWork,
@@ -20,8 +23,7 @@ from app.modules.assistant.domain.exceptions import (
     AgentActionValidationException,
     AgentAlreadyActiveException,
     AgentInterpretationFailedException,
-    AiServiceUnavailableException,
-    InvalidAudioFormatException,
+    InvalidImageFormatException,
 )
 from app.modules.assistant.domain.repositories.agent_activity_repository import (
     AgentActivityRepository,
@@ -49,42 +51,37 @@ from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_AUDIO_MIME_TYPES = {
-    "audio/mp3",
-    "audio/mpeg",
-    "audio/wav",
-    "audio/x-wav",
-    "audio/wave",
-    "audio/ogg",
-    "audio/webm",
-    "audio/x-m4a",
-    "audio/m4a",
-    "audio/mp4",
-    "audio/aac",
-    "audio/flac",
+SUPPORTED_IMAGE_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
 }
+MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 @dataclass(frozen=True, slots=True)
-class ProcessVoiceCommand:
+class ProcessImageCommand:
     project_id: UUID
     user_id: str
-    audio_data: bytes
-    audio_mime_type: str
+    image_data: bytes
+    image_mime_type: str
+    prompt: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class ProcessVoiceCommandResultDto:
+class ProcessImageCommandResultDto:
     activity_id: UUID
     state: str
     transcription: str | None
     resume: str | None
     actions_count: int
     actions: list[dict[str, str]]
+    image_url: str | None = None
 
 
-class ProcessVoiceCommandUseCase:
-    """Orquesta la interpretación de voz, validación de acciones, ejecución atómica y notificación."""
+class ProcessImageCommandUseCase:
+    """Orquesta la interpretación de diagramas por imagen, validación de acciones, ejecución atómica y notificación."""
 
     def __init__(
         self,
@@ -97,6 +94,7 @@ class ProcessVoiceCommandUseCase:
         batch_uow: AtomicBatchUnitOfWork,
         real_uow: SqlModelUnitOfWork,
         connection_manager: ConnectionManager,
+        image_storage_provider: ImageStorageProvider | None = None,
     ) -> None:
         self.access_policy = access_policy
         self.ai_provider = ai_provider
@@ -107,17 +105,21 @@ class ProcessVoiceCommandUseCase:
         self.batch_uow = batch_uow
         self.real_uow = real_uow
         self.connection_manager = connection_manager
+        self.image_storage_provider = image_storage_provider
 
     async def execute(
-        self, command: ProcessVoiceCommand
-    ) -> ProcessVoiceCommandResultDto:
-        # 1. Validar formato de audio
-        normalized_mime = command.audio_mime_type.split(";")[0].strip().lower()
+        self, command: ProcessImageCommand
+    ) -> ProcessImageCommandResultDto:
+        # 1. Validar formato y tamaño de imagen
+        normalized_mime = command.image_mime_type.split(";")[0].strip().lower()
         if (
-            normalized_mime not in SUPPORTED_AUDIO_MIME_TYPES
-            and not normalized_mime.startswith("audio/")
+            normalized_mime not in SUPPORTED_IMAGE_MIME_TYPES
+            and not normalized_mime.startswith("image/")
         ):
-            raise InvalidAudioFormatException()
+            raise InvalidImageFormatException()
+
+        if len(command.image_data) == 0 or len(command.image_data) > MAX_IMAGE_SIZE_BYTES:
+            raise InvalidImageFormatException()
 
         # 2. Validar permiso de edición en el proyecto (lanza DiagramWriteForbiddenException si no tiene)
         self.access_policy.ensure_write_access(
@@ -128,7 +130,23 @@ class ProcessVoiceCommandUseCase:
         if self.agent_activity_repository.find_active_by_project_id(command.project_id):
             raise AgentAlreadyActiveException()
 
-        activity = AgentActivity.create(project_id=command.project_id)
+        # Opcional: Subir imagen al storage externo
+        image_url: str | None = None
+        if self.image_storage_provider:
+            try:
+                ext = "png" if "png" in normalized_mime else "webp" if "webp" in normalized_mime else "jpg"
+                filename = f"diagram_{command.project_id}_{ext}"
+                image_url = await self.image_storage_provider.upload(
+                    image_data=command.image_data,
+                    filename=filename,
+                )
+            except Exception as exc:
+                logger.warning("No se pudo almacenar la imagen en storage externo: %s", exc)
+
+        activity = AgentActivity.create(
+            project_id=command.project_id,
+            image_url=image_url,
+        )
         self.agent_activity_repository.save(activity)
         try:
             # La restricción parcial de la BD cubre la carrera entre dos solicitudes.
@@ -174,10 +192,8 @@ class ProcessVoiceCommandUseCase:
             )
             snapshot = DiagramSnapshotDto(classes=classes, relations=relations)
 
-            # Pulido T028: truncar snapshot si excede 120 clases para no exceder contexto Gemini
             max_snapshot_classes = 120
             snapshot_classes = classes[:max_snapshot_classes]
-            # Sanitizar atributos TEXT largos (truncar nombre si >64)
             snapshot_dict = {
                 "classes": [
                     {
@@ -225,13 +241,14 @@ class ProcessVoiceCommandUseCase:
             available_relation_types = [rt.value for rt in DiagramRelationType]
             available_cardinalities = [cd.value for cd in DiagramCardinality]
 
-            ai_result = await self.ai_provider.interpret_voice_command(
-                audio_data=command.audio_data,
-                audio_mime_type=normalized_mime,
+            ai_result = await self.ai_provider.interpret_image_command(
+                image_data=command.image_data,
+                image_mime_type=normalized_mime,
                 diagram_snapshot=snapshot_dict,
                 available_data_types=available_data_types,
                 available_relation_types=available_relation_types,
                 available_cardinalities=available_cardinalities,
+                prompt=command.prompt,
             )
 
             # 7. Si no hay acciones generadas por la IA
@@ -245,13 +262,14 @@ class ProcessVoiceCommandUseCase:
 
                 await publish_terminal("FINISHED")
 
-                return ProcessVoiceCommandResultDto(
+                return ProcessImageCommandResultDto(
                     activity_id=activity.id,
                     state="FINISHED",
                     transcription=ai_result.transcription,
                     resume=ai_result.resume,
                     actions_count=0,
                     actions=[],
+                    image_url=image_url,
                 )
 
             # 8. Planificar y validar acciones deterministamente
@@ -262,10 +280,7 @@ class ProcessVoiceCommandUseCase:
                 snapshot=snapshot,
             )
 
-            # El permiso puede cambiar mientras la IA interpreta el audio. La
-            # actividad propia mantiene el lock, por eso se omite únicamente
-            # esa comprobación al repetir la autorización inmediatamente antes
-            # de ejecutar el lote.
+            # Re-verificar acceso
             self.access_policy.ensure_write_access(
                 command.project_id,
                 command.user_id,
@@ -292,7 +307,7 @@ class ProcessVoiceCommandUseCase:
             self.agent_activity_repository.save(activity)
             self.real_uow.session.commit()
 
-            # 11. Emitir mutaciones una por una por WebSocket (simula trabajo secuencial)
+            # 11. Emitir mutaciones una por una por WebSocket
             for event in self.batch_uow.collected_events:
                 payload = {
                     "type": "diagram_mutation",
@@ -309,21 +324,28 @@ class ProcessVoiceCommandUseCase:
             # 12. Notificar fin de actividad con éxito
             await publish_terminal("FINISHED")
 
-            return ProcessVoiceCommandResultDto(
+            return ProcessImageCommandResultDto(
                 activity_id=activity.id,
                 state="FINISHED",
                 transcription=ai_result.transcription,
                 resume=ai_result.resume,
                 actions_count=len(executed_actions),
                 actions=executed_actions,
+                image_url=image_url,
             )
 
         except Exception as exc:
-            # Pulido T009/T038: 409/422 son esperables de dominio → warning, no error que contamina consola
-            if isinstance(exc, (AgentActionValidationException, AgentInterpretationFailedException, AgentAlreadyActiveException)):
-                logger.warning("Comando de voz rechazado (dominio): %s", exc)
+            if isinstance(
+                exc,
+                (
+                    AgentActionValidationException,
+                    AgentInterpretationFailedException,
+                    AgentAlreadyActiveException,
+                ),
+            ):
+                logger.warning("Comando de imagen rechazado (dominio): %s", exc)
             else:
-                logger.error("Error durante el procesamiento del comando de voz: %s", exc)
+                logger.error("Error durante el procesamiento del comando de imagen: %s", exc)
             self.batch_uow.rollback()
 
             transcription = (
@@ -341,8 +363,5 @@ class ProcessVoiceCommandUseCase:
                     self.real_uow.session.rollback()
                 await publish_terminal("FAILED")
             else:
-                # El lote ya quedó confirmado; un fallo de notificación no
-                # debe convertir retrospectivamente una actividad exitosa en
-                # FAILED ni emitir dos cierres.
                 await publish_terminal("FINISHED")
             raise exc

@@ -16,6 +16,7 @@ engine = create_engine(
     echo=settings.SQL_ECHO,
     connect_args=connect_args,
     pool_pre_ping=pool_pre_ping,
+    pool_recycle=300,
 )
 
 if settings.is_sqlite:

@@ -22,6 +22,13 @@ class InvalidAudioFormatException(ValidationException):
     message = "El formato del archivo de audio no es compatible."
 
 
+class InvalidImageFormatException(ValidationException):
+    """El formato o tamaño del archivo de imagen no es compatible con el asistente."""
+
+    code = "INVALID_IMAGE_FORMAT"
+    message = "El formato de imagen no es compatible o el archivo excede el tamaño máximo permitido (10 MB)."
+
+
 class AgentInterpretationFailedException(ValidationException):
     """El modelo de IA no pudo extraer o estructurar acciones comprensibles."""
 

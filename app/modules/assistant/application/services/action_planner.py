@@ -50,6 +50,128 @@ class ValidatedAction:
 class ActionPlanner:
     """Valida, resuelve identificadores y estructura las acciones generadas por la IA."""
 
+    @staticmethod
+    def _is_colliding(
+        x: float,
+        y: float,
+        existing_classes: list[PlannedClass],
+        safety_margin_x: float = 340.0,
+        safety_margin_y: float = 230.0,
+    ) -> bool:
+        for c in existing_classes:
+            if abs(x - c.position_x) < safety_margin_x and abs(y - c.position_y) < safety_margin_y:
+                return True
+        return False
+
+    def _find_smart_position(
+        self,
+        class_name: str,
+        raw_x: Any,
+        raw_y: Any,
+        all_actions: list[AiAction],
+        classes_by_name: dict[str, PlannedClass],
+    ) -> tuple[float, float]:
+        step_x = 380.0
+        step_y = 270.0
+        origin_x = 160.0
+        origin_y = 120.0
+        existing_list = list(classes_by_name.values())
+
+        # Si el AI proveyó coordenadas explícitas válidas
+        if raw_x is not None and raw_y is not None:
+            try:
+                px = float(raw_x)
+                py = float(raw_y)
+                if math.isfinite(px) and math.isfinite(py):
+                    if not self._is_colliding(px, py, existing_list):
+                        return px, py
+            except (ValueError, TypeError):
+                pass
+
+        if not existing_list:
+            return origin_x, origin_y
+
+        # 1. Buscar si esta clase tiene relación con alguna clase existente
+        ref_class: PlannedClass | None = None
+        for act in all_actions:
+            act_p = act.payload or {}
+            if act.type == AgentActionType.CREATE_RELATION:
+                src = str(act_p.get("source_class_name", "")).strip().lower()
+                tgt = str(act_p.get("target_class_name", "")).strip().lower()
+                cur = class_name.lower()
+                if src == cur and tgt in classes_by_name:
+                    ref_class = classes_by_name[tgt]
+                    break
+                elif tgt == cur and src in classes_by_name:
+                    ref_class = classes_by_name[src]
+                    break
+            elif act.type == AgentActionType.MOVE_CLASS:
+                c_name = str(act_p.get("class_name", "")).strip().lower()
+                ref_name = str(act_p.get("reference_class_name", "")).strip().lower()
+                if c_name == class_name.lower() and ref_name in classes_by_name:
+                    ref_class = classes_by_name[ref_name]
+                    break
+
+        if ref_class is not None:
+            # Buscar en anillos concéntricos alrededor de la clase de referencia
+            rx, ry = ref_class.position_x, ref_class.position_y
+            candidate_offsets = [
+                (step_x, 0.0),       # DERECHA
+                (0.0, step_y),       # ABAJO
+                (-step_x, 0.0),      # IZQUIERDA
+                (0.0, -step_y),      # ARRIBA
+                (step_x, step_y),    # ABAJO DERECHA
+                (-step_x, step_y),   # ABAJO IZQUIERDA
+                (step_x, -step_y),   # ARRIBA DERECHA
+                (-step_x, -step_y),  # ARRIBA IZQUIERDA
+                (step_x * 2, 0.0),
+                (0.0, step_y * 2),
+                (-step_x * 2, 0.0),
+                (0.0, -step_y * 2),
+            ]
+            for dx, dy in candidate_offsets:
+                cx = rx + dx
+                cy = ry + dy
+                if cx >= 60.0 and cy >= 60.0 and not self._is_colliding(cx, cy, existing_list):
+                    return cx, cy
+
+        # 2. Si no hay relación directa, posicionar cerca de la conglomeración (cluster)
+        center_x = sum(c.position_x for c in existing_list) / len(existing_list)
+        center_y = sum(c.position_y for c in existing_list) / len(existing_list)
+
+        # Generar candidatos en cuadrícula y ordenar por distancia al centroide
+        best_candidate = None
+        best_dist = float("inf")
+
+        min_gx = min(c.position_x for c in existing_list)
+        max_gx = max(c.position_x for c in existing_list)
+        min_gy = min(c.position_y for c in existing_list)
+        max_gy = max(c.position_y for c in existing_list)
+
+        start_col = max(0, int(min_gx // step_x) - 1)
+        end_col = int(max_gx // step_x) + 2
+        start_row = max(0, int(min_gy // step_y) - 1)
+        end_row = int(max_gy // step_y) + 2
+
+        for col in range(start_col, end_col + 2):
+            for row in range(start_row, end_row + 2):
+                cx = origin_x + col * step_x
+                cy = origin_y + row * step_y
+                if cx < 60.0 or cy < 60.0:
+                    continue
+                if not self._is_colliding(cx, cy, existing_list):
+                    dist = (cx - center_x) ** 2 + (cy - center_y) ** 2
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_candidate = (cx, cy)
+
+        if best_candidate is not None:
+            return best_candidate
+
+        # Fallback de emergencia
+        total = len(existing_list)
+        return origin_x + (total % 4) * step_x, origin_y + (total // 4) * step_y
+
     def plan_actions(
         self,
         project_id: UUID,
@@ -121,18 +243,16 @@ class ActionPlanner:
                 class_id = uuid4()
                 pk_id = uuid4()
 
-                # Posición automática en cuadrícula
-                total_classes = len(classes_by_name)
-                col = total_classes % 4
-                row = total_classes // 4
+                # Posición inteligente con prevención de colisiones y proximidad semántica
                 raw_x = raw_payload.get("position_x")
                 raw_y = raw_payload.get("position_y")
-                pos_x = float(raw_x) if raw_x is not None else (120.0 + col * 280.0)
-                pos_y = float(raw_y) if raw_y is not None else (100.0 + row * 240.0)
-                if not math.isfinite(pos_x) or not math.isfinite(pos_y):
-                    raise AgentActionValidationException(
-                        "La posición propuesta para la clase no es un número finito."
-                    )
+                pos_x, pos_y = self._find_smart_position(
+                    class_name=name,
+                    raw_x=raw_x,
+                    raw_y=raw_y,
+                    all_actions=ai_actions,
+                    classes_by_name=classes_by_name,
+                )
 
                 pk_attribute_name = "id"
                 pk_attr = {
@@ -228,6 +348,127 @@ class ActionPlanner:
                         action_type=AgentActionType.RENAME_CLASS,
                         payload=payload,
                         summary=f"Clase '{old_name}' renombrada a '{new_name}'",
+                    )
+                )
+
+            elif ai_action.type == AgentActionType.MOVE_CLASS:
+                class_name = str(raw_payload.get("class_name", "")).strip()
+                if not class_name:
+                    raise AgentActionValidationException("El nombre de la clase a mover no puede estar vacío.")
+                target_pc = classes_by_name.get(class_name.lower())
+                if target_pc is None:
+                    raise AgentActionValidationException(
+                        f"No se encontró la clase '{class_name}' para mover."
+                    )
+                # Resolver destino: prioridad position_x/y explícitos, luego referencia+dirección, luego zona
+                ref_name = str(raw_payload.get("reference_class_name", "")).strip() if raw_payload.get("reference_class_name") else None
+                direction = str(raw_payload.get("direction", "")).strip().upper() if raw_payload.get("direction") else None
+                zone = str(raw_payload.get("zone", "")).strip().lower() if raw_payload.get("zone") else None
+                raw_x = raw_payload.get("position_x")
+                raw_y = raw_payload.get("position_y")
+                new_x: float | None = None
+                new_y: float | None = None
+                if raw_x is not None and raw_y is not None:
+                    try:
+                        new_x = float(raw_x)
+                        new_y = float(raw_y)
+                        if not math.isfinite(new_x) or not math.isfinite(new_y):
+                            raise AgentActionValidationException(
+                                "La posición propuesta para mover la clase no es un número finito."
+                            )
+                    except (TypeError, ValueError):
+                        raise AgentActionValidationException(
+                            "La posición propuesta para mover la clase no es válida."
+                        )
+                else:
+                    # Resolver por referencia o zona
+                    if ref_name:
+                        ref_pc = classes_by_name.get(ref_name.lower())
+                        if ref_name and ref_pc is None:
+                            raise AgentActionValidationException(
+                                f"No se encontró la clase de referencia '{ref_name}' para mover '{class_name}'."
+                            )
+                        # dirección por defecto RIGHT si no se especifica
+                        dir_norm = direction or "RIGHT"
+                        offset = 280.0
+                        if dir_norm == "RIGHT":
+                            new_x = ref_pc.position_x + offset
+                            new_y = ref_pc.position_y
+                        elif dir_norm == "LEFT":
+                            new_x = ref_pc.position_x - offset
+                            new_y = ref_pc.position_y
+                        elif dir_norm == "TOP":
+                            new_x = ref_pc.position_x
+                            new_y = ref_pc.position_y - 240.0
+                        elif dir_norm == "BOTTOM":
+                            new_x = ref_pc.position_x
+                            new_y = ref_pc.position_y + 240.0
+                        elif dir_norm in ("NEAR", "CLOSE", "CERCA"):
+                            new_x = ref_pc.position_x + 180.0
+                            new_y = ref_pc.position_y + 60.0
+                        else:
+                            new_x = ref_pc.position_x + offset
+                            new_y = ref_pc.position_y
+                    elif zone:
+                        zone_map = {
+                            "center": (600.0, 400.0),
+                            "centro": (600.0, 400.0),
+                            "top-left": (150.0, 100.0),
+                            "top-right": (1050.0, 100.0),
+                            "bottom-left": (150.0, 700.0),
+                            "bottom-right": (1050.0, 700.0),
+                        }
+                        if zone in zone_map:
+                            new_x, new_y = zone_map[zone]
+                        else:
+                            new_x, new_y = zone_map["center"]
+                    elif direction:
+                        # dirección sin referencia: mover relativo a posición actual
+                        step = 120.0
+                        if direction == "RIGHT":
+                            new_x = target_pc.position_x + step
+                            new_y = target_pc.position_y
+                        elif direction == "LEFT":
+                            new_x = target_pc.position_x - step
+                            new_y = target_pc.position_y
+                        elif direction == "TOP":
+                            new_x = target_pc.position_x
+                            new_y = target_pc.position_y - step
+                        elif direction == "BOTTOM":
+                            new_x = target_pc.position_x
+                            new_y = target_pc.position_y + step
+                        else:
+                            new_x = target_pc.position_x + step
+                            new_y = target_pc.position_y
+                    else:
+                        raise AgentActionValidationException(
+                            f"No se pudo determinar el destino para mover la clase '{class_name}'. Indique dirección, referencia o zona."
+                        )
+                # Validar finitos y aplicar fallback no colisionante simple
+                assert new_x is not None and new_y is not None
+                if not math.isfinite(new_x) or not math.isfinite(new_y):
+                    raise AgentActionValidationException(
+                        "La posición calculada para mover la clase no es válida."
+                    )
+                # Evitar superposición total: si otra clase ya ocupa exactamente esa posición, desplazar levemente
+                for other in classes_by_name.values():
+                    if other.id != target_pc.id and abs(other.position_x - new_x) < 5 and abs(other.position_y - new_y) < 5:
+                        new_x += 30.0
+                        new_y += 30.0
+                        break
+                target_pc.position_x = new_x
+                target_pc.position_y = new_y
+                payload = {
+                    "class_id": target_pc.id,
+                    "user_id": user_id,
+                    "position_x": new_x,
+                    "position_y": new_y,
+                }
+                validated_actions.append(
+                    ValidatedAction(
+                        action_type=AgentActionType.MOVE_CLASS,
+                        payload=payload,
+                        summary=f"Clase '{target_pc.name}' movida a ({new_x:.0f}, {new_y:.0f})",
                     )
                 )
 

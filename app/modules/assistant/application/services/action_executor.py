@@ -28,6 +28,10 @@ from app.modules.diagram.application.use_cases.diagram_class.delete_diagram_clas
     DeleteDiagramClassCommand,
     DeleteDiagramClassUseCase,
 )
+from app.modules.diagram.application.use_cases.diagram_class.move_diagram_class import (
+    MoveDiagramClassCommand,
+    MoveDiagramClassUseCase,
+)
 from app.modules.diagram.application.use_cases.diagram_class.rename_diagram_class import (
     RenameDiagramClassCommand,
     RenameDiagramClassUseCase,
@@ -146,6 +150,11 @@ class ActionExecutor:
             diagram_class_repository=diagram_class_repository,
             uow=batch_uow,
         )
+        self.move_class_uc = MoveDiagramClassUseCase(
+            access_policy=self.agent_access_policy,
+            diagram_class_repository=diagram_class_repository,
+            uow=batch_uow,
+        )
 
         # Casos de uso de atributo
         self.create_attr_uc = CreateDiagramAttributeUseCase(
@@ -258,3 +267,12 @@ class ActionExecutor:
                 new_name=p["new_name"],
             )
             self.rename_rel_uc.execute(cmd)
+
+        elif action.action_type == AgentActionType.MOVE_CLASS:
+            cmd = MoveDiagramClassCommand(
+                class_id=p["class_id"],
+                user_id=p["user_id"],
+                position_x=p["position_x"],
+                position_y=p["position_y"],
+            )
+            self.move_class_uc.execute(cmd)

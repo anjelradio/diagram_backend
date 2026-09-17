@@ -45,3 +45,18 @@ class VoiceCommandResultRead(BaseModel):
         default_factory=list,
         description="Listado secuencial de acciones ejecutadas",
     )
+
+
+class ImageCommandResultRead(BaseModel):
+    """Respuesta pública con el resultado del análisis y recreación de diagrama por imagen."""
+
+    activity_id: UUID = Field(description="Identificador único de la actividad del asistente")
+    state: str = Field(description="Estado final de la actividad (FINISHED, FAILED, etc.)")
+    transcription: str | None = Field(default=None, description="Transcripción asociada, si aplica")
+    resume: str | None = Field(default=None, description="Resumen o explicación redactada por el asistente")
+    image_url: str | None = Field(default=None, description="URL pública de la imagen procesada")
+    actions_count: int = Field(description="Cantidad de acciones ejecutadas sobre el diagrama")
+    actions: list[ActionResultRead] = Field(
+        default_factory=list,
+        description="Listado secuencial de acciones ejecutadas",
+    )

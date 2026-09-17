@@ -43,7 +43,7 @@ class AgentActivity:
             state=AgentActivityState.IN_PROGRESS,
         )
 
-    def finish(self, transcription: str, resume: str) -> None:
+    def finish(self, transcription: str | None = None, resume: str = "") -> None:
         """Marca la actividad como finalizada exitosamente con su transcripción y resumen."""
         self.transcription = transcription
         self.resume = resume

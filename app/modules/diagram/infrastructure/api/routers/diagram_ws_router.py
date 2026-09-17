@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, WebSocketException
 from sqlmodel import Session
 
-from app.core.database import get_session
+from app.core.database import engine
 from app.modules.diagram.infrastructure.api.dependencies.ws_auth import (
     get_ws_auth_user,
     get_ws_project_access,
@@ -32,11 +32,11 @@ ws_router = APIRouter(tags=["diagram-realtime"])
 async def diagram_websocket(
     websocket: WebSocket,
     project_id: UUID,
-    db: Session = Depends(get_session),
 ) -> None:
     """Autentica la sala, distribuye eventos y limpia la sesión al salir."""
     user = get_ws_auth_user(websocket)
-    access = get_ws_project_access(db, project_id, user)
+    with Session(engine) as db:
+        access = get_ws_project_access(db, project_id, user)
     role = access.access_role.value
     session = ClientSession(
         websocket=websocket,

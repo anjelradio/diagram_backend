@@ -15,9 +15,9 @@ class AiAction:
 
 @dataclass(frozen=True, slots=True)
 class AiInterpretationResult:
-    """Resultado estructurado de la interpretación del comando de voz."""
+    """Resultado estructurado de la interpretación de una orden de IA (voz o imagen)."""
 
-    transcription: str
+    transcription: str | None
     resume: str
     actions: list[AiAction]
 
@@ -36,4 +36,18 @@ class AiProvider(ABC):
         available_cardinalities: list[str],
     ) -> AiInterpretationResult:
         """Interpreta un comando de voz en el contexto del diagrama actual."""
+        ...
+
+    @abstractmethod
+    async def interpret_image_command(
+        self,
+        image_data: bytes,
+        image_mime_type: str,
+        diagram_snapshot: dict[str, Any],
+        available_data_types: list[str],
+        available_relation_types: list[str],
+        available_cardinalities: list[str],
+        prompt: str | None = None,
+    ) -> AiInterpretationResult:
+        """Interpreta un diagrama a partir de una imagen y genera el plan de acciones."""
         ...

@@ -21,8 +21,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from app.modules.projects.infrastructure.api.routers.project_members_router import (
-    router as project_members_router,
+from app.modules.collaboration.infrastructure.api.routers.collaboration_router import (
+    router as collaboration_router,
 )
 from app.modules.projects.infrastructure.api.routers.projects_router import (
     router as projects_router,
@@ -35,6 +35,9 @@ from app.modules.diagram.infrastructure.api.routers.diagram_ws_router import (
 )
 from app.modules.assistant.infrastructure.api.routers.assistant_router import (
     router as assistant_router,
+)
+from app.modules.code_generation.infrastructure.api.routers.code_generation_router import (
+    router as code_generation_router,
 )
 from app.modules.diagram.infrastructure.realtime.broadcast_handler import (
     configure_broadcast_loop,
@@ -147,7 +150,8 @@ def health_check():
 # REGISTRO DE ROUTERS
 # ==============================================================================
 app.include_router(projects_router, prefix="/api")
-app.include_router(project_members_router, prefix="/api")
+app.include_router(collaboration_router, prefix="/api")
 app.include_router(diagram_router, prefix="/api")
 app.include_router(diagram_ws_router, prefix="/api")
 app.include_router(assistant_router, prefix="/api")
+app.include_router(code_generation_router, prefix="/api")

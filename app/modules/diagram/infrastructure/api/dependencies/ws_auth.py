@@ -7,11 +7,11 @@ from fastapi import WebSocket, WebSocketException, status
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 
 from app.core.security.auth import AuthUser, _get_jwks_client
-from app.modules.projects.application.services.project_access_policy import (
+from app.modules.collaboration.application.services.project_access_policy import (
     ProjectAccessContext,
     ProjectAccessPolicy,
 )
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
+from app.modules.collaboration.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
     SQLModelProjectMemberRepository,
 )
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (

@@ -16,6 +16,7 @@ from app.modules.diagram.domain.exceptions import (
     InvalidDiagramRelationMaterializationException,
     InvalidDiagramRelationNameException,
     NonAssociativeRelationNameCannotBeModifiedException,
+    SelfReferencingNonAssociationException,
 )
 
 
@@ -38,7 +39,12 @@ class DiagramRelation:
         bridge_handle: DiagramRelationHandle | None = None,
     ) -> None:
         if source_class_id == target_class_id:
-            raise DiagramRelationSelfReferenceException()
+            if relation_type != DiagramRelationType.ASSOCIATION:
+                raise SelfReferencingNonAssociationException()
+            if source_handle == target_handle:
+                raise InvalidDiagramRelationHandleException(
+                    "Una relación recursiva debe utilizar handles distintos en origen y destino."
+                )
 
         self.id = id
         self.project_id = project_id

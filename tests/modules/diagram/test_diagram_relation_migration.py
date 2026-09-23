@@ -70,30 +70,65 @@ def test_relation_table_and_cascade(
     assert session.get(DiagramAttributeModel, fk_attr_id) is None
 
 
-def test_check_constraint_rejects_self_reference(
+def test_check_constraint_rejects_non_association_or_same_handle_self_reference(
     session: Session,
     test_project: ProjectModel,
     two_classes: tuple[DiagramClassModel, DiagramClassModel],
 ):
     source_class, _ = two_classes
 
-    # Intentar autorrelación directamente en base de datos
-    invalid_rel = DiagramRelationModel(
+    # 1. Intentar autorrelación con tipo no asociativo (ej: GENERALIZATION)
+    invalid_rel_type = DiagramRelationModel(
+        id=uuid.uuid4(),
+        project_id=test_project.id,
+        source_class_id=source_class.id,
+        target_class_id=source_class.id,
+        relation_type="GENERALIZATION",
+        source_handle="TOP_CENTER",
+        target_handle="BOTTOM_CENTER",
+        name="SelfGen",
+        source_cardinality=None,
+        target_cardinality=None,
+    )
+    session.add(invalid_rel_type)
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+    # 2. Intentar autorrelación con handles iguales
+    invalid_rel_handle = DiagramRelationModel(
         id=uuid.uuid4(),
         project_id=test_project.id,
         source_class_id=source_class.id,
         target_class_id=source_class.id,
         relation_type="ASSOCIATION",
         source_handle="TOP_CENTER",
-        target_handle="BOTTOM_CENTER",
-        name="Self",
+        target_handle="TOP_CENTER",
+        name="SelfSameHandle",
         source_cardinality="1",
         target_cardinality="1",
     )
-    session.add(invalid_rel)
+    session.add(invalid_rel_handle)
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()
+
+    # 3. Verificar que autorrelación de tipo ASSOCIATION con handles distintos sea permitida
+    valid_self_rel = DiagramRelationModel(
+        id=uuid.uuid4(),
+        project_id=test_project.id,
+        source_class_id=source_class.id,
+        target_class_id=source_class.id,
+        relation_type="ASSOCIATION",
+        source_handle="RIGHT_TOP",
+        target_handle="RIGHT_BOTTOM",
+        name="SelfValid",
+        source_cardinality="1",
+        target_cardinality="1",
+    )
+    session.add(valid_self_rel)
+    session.commit()
+    assert session.get(DiagramRelationModel, valid_self_rel.id) is not None
 
 
 def test_check_constraint_rejects_inconsistent_fk_attribute(

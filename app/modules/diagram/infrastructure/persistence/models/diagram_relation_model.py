@@ -11,8 +11,8 @@ class DiagramRelationModel(BaseModel, table=True):
     __tablename__ = "diagram_relations"
     __table_args__ = (
         CheckConstraint(
-            "source_class_id != target_class_id",
-            name="ck_diagram_relations_no_self_reference",
+            "(source_class_id != target_class_id) OR (relation_type = 'ASSOCIATION' AND source_handle != target_handle)",
+            name="ck_diagram_relations_self_reference_rule",
         ),
         CheckConstraint(
             "(relation_type = 'ASSOCIATION' AND source_cardinality IS NOT NULL AND target_cardinality IS NOT NULL) "

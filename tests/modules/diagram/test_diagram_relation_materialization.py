@@ -457,3 +457,119 @@ def test_parity_matrix_for_all_relation_types():
         },
     }
     validate_relation_materialization(relation_id, nm_plan, nm_payload)
+
+
+def test_self_referencing_one_to_many_and_one_to_one_materialization():
+    class_id = uuid.uuid4()
+    relation_id = uuid.uuid4()
+
+    # Auto-asociación 1:N
+    plan_self_1n = determine_materialization_plan(
+        relation_type=DiagramRelationType.ASSOCIATION,
+        source_class_id=class_id,
+        target_class_id=class_id,
+        source_cardinality=DiagramCardinality.ZERO_OR_ONE,
+        target_cardinality=DiagramCardinality.ZERO_OR_MORE,
+    )
+    assert plan_self_1n.strategy == MaterializationStrategy.FOREIGN_KEY
+    assert plan_self_1n.foreign_key.receiving_class_id == class_id
+    assert plan_self_1n.foreign_key.referenced_class_id == class_id
+    assert plan_self_1n.foreign_key.is_nullable is True
+
+    # Auto-asociación 1:1
+    plan_self_11 = determine_materialization_plan(
+        relation_type=DiagramRelationType.ASSOCIATION,
+        source_class_id=class_id,
+        target_class_id=class_id,
+        source_cardinality=DiagramCardinality.EXACTLY_ONE,
+        target_cardinality=DiagramCardinality.EXACTLY_ONE,
+    )
+    assert plan_self_11.strategy == MaterializationStrategy.FOREIGN_KEY
+    assert plan_self_11.foreign_key.receiving_class_id == class_id
+    assert plan_self_11.foreign_key.referenced_class_id == class_id
+    assert plan_self_11.foreign_key.is_nullable is True
+
+    # Validar payload de FK auto-referenciada
+    payload = {
+        "strategy": "FOREIGN_KEY",
+        "foreign_attributes": [
+            {
+                "id": str(uuid.uuid4()),
+                "class_id": str(class_id),
+                "name": "parent_category_id",
+                "data_type": "UUID",
+                "position": 1,
+                "is_primary_key": False,
+                "is_nullable": True,
+                "is_foreign_key": True,
+                "referenced_class_id": str(class_id),
+                "relation_id": str(relation_id),
+            }
+        ],
+    }
+    validate_relation_materialization(relation_id, plan_self_1n, payload)
+
+
+def test_self_referencing_many_to_many_materialization():
+    class_id = uuid.uuid4()
+    relation_id = uuid.uuid4()
+    bridge_id = uuid.uuid4()
+
+    plan = determine_materialization_plan(
+        relation_type=DiagramRelationType.ASSOCIATION,
+        source_class_id=class_id,
+        target_class_id=class_id,
+        source_cardinality=DiagramCardinality.ZERO_OR_MORE,
+        target_cardinality=DiagramCardinality.ZERO_OR_MORE,
+    )
+    assert plan.strategy == MaterializationStrategy.BRIDGE_CLASS
+    assert plan.bridge_class.source_class_id == class_id
+    assert plan.bridge_class.target_class_id == class_id
+
+    # Validar payload de puente reflexivo con dos FKs apuntando a la misma clase
+    bridge_payload = {
+        "strategy": "BRIDGE_CLASS",
+        "bridge_class": {
+            "id": str(bridge_id),
+            "name": "PersonRelation",
+            "position_x": 100.0,
+            "position_y": 200.0,
+            "handle": "TOP_CENTER",
+            "primary_attribute": {
+                "id": str(uuid.uuid4()),
+                "name": "id",
+                "data_type": "UUID",
+                "position": 0,
+                "is_primary_key": True,
+                "is_nullable": False,
+            },
+            "foreign_attributes": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "class_id": str(bridge_id),
+                    "name": "person_id",
+                    "data_type": "UUID",
+                    "position": 1,
+                    "is_primary_key": False,
+                    "is_nullable": False,
+                    "is_foreign_key": True,
+                    "referenced_class_id": str(class_id),
+                    "relation_id": str(relation_id),
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "class_id": str(bridge_id),
+                    "name": "related_person_id",
+                    "data_type": "UUID",
+                    "position": 2,
+                    "is_primary_key": False,
+                    "is_nullable": False,
+                    "is_foreign_key": True,
+                    "referenced_class_id": str(class_id),
+                    "relation_id": str(relation_id),
+                },
+            ],
+        },
+    }
+    validate_relation_materialization(relation_id, plan, bridge_payload)
+

@@ -1,0 +1,42 @@
+# {{project_name}} - Generated Spring Boot Backend
+
+Backend generado automáticamente con Spring Boot 3 y PostgreSQL a partir de diagram-app.
+
+## 🚀 Requisitos
+- [Docker](https://www.docker.com/) y Docker Compose instalados.
+
+## ⚡ Iniciar en un solo comando
+Para compilar y levantar tanto la base de datos PostgreSQL como la aplicación Spring Boot:
+
+```bash
+docker compose up --build
+```
+*(O `docker-compose up --build` según tu instalación).*
+
+La aplicación arrancará en:
+- **Spring Boot API**: `http://localhost:{{server_port}}`
+- **PostgreSQL Database**: `localhost:5432` (`{{database_name}}`)
+- **Documentación Interactiva Swagger UI**: `http://localhost:{{server_port}}/swagger-ui.html`
+- **Especificación OpenAPI v3**: `http://localhost:{{server_port}}/v3/api-docs`
+
+---
+
+## 📖 Swagger UI / OpenAPI
+Puedes abrir en tu navegador `http://localhost:{{server_port}}/swagger-ui.html` para explorar y probar interactivamente cada uno de los endpoints CRUD generados sin necesidad de Postman ni comandos curl manuales.
+
+---
+
+## 📱 Soporte Móvil y Local-First (Flutter & Asistentes de IA)
+
+Este paquete incluye dos archivos clave en la raíz para desarrollo móvil:
+1. **`schema.sql` (SQLite DDL Mirror)**:
+   - Script SQL adaptado específicamente para **SQLite** (tipos `TEXT`, `INTEGER`, `REAL`, claves foráneas con `ON UPDATE CASCADE ON DELETE RESTRICT` e índices).
+   - Listo para ejecutarse directamente en aplicaciones **Flutter** (mediante `sqflite` o `drift`) para inicializar una base de datos espejo local.
+2. **`capabilities.json` (Versión 2.0.0)**:
+   - Especificación compacta de entidades, campos, tipos estandarizados y relaciones diseñada para asistentes móviles y agentes de IA locales (Gemma / LLMs en dispositivo).
+
+---
+
+## 📡 Endpoints CRUD Disponibles
+
+{{endpoints_summary}}

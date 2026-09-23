@@ -1,18 +1,18 @@
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.collaboration.application.services.project_access_policy import (
+    ProjectAccessPolicy,
+)
+from app.modules.collaboration.domain.repositories.project_member_repository import (
+    ProjectMemberRepository,
+)
 from app.modules.diagram.domain.exceptions import (
     DiagramAgentLockedException,
     DiagramWriteForbiddenException,
 )
-from app.modules.projects.application.services.project_access_policy import (
-    ProjectAccessPolicy,
-)
 from app.modules.projects.domain.entities.project import Project
 from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole
-from app.modules.projects.domain.repositories.project_member_repository import (
-    ProjectMemberRepository,
-)
 from app.modules.projects.domain.repositories.project_repository import (
     ProjectRepository,
 )

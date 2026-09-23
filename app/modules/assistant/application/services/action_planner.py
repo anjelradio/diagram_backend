@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import logging
 import math
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,6 +30,46 @@ from app.modules.diagram.domain.enums.diagram_relation_handle import (
 from app.modules.diagram.domain.enums.diagram_relation_type import (
     DiagramRelationType,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def is_id_or_foreign_key_attribute(name: str) -> bool:
+    """
+    Determina si un nombre de atributo corresponde a un identificador primario o foráneo.
+    En este sistema, las claves primarias (id: UUID) se generan automáticamente con la clase
+    y las claves foráneas (*_id, id_*) se derivan automáticamente de las relaciones.
+    """
+    cleaned = name.strip()
+    lower = cleaned.lower()
+    if lower == "id":
+        return True
+    if lower.endswith("_id") or lower.startswith("id_"):
+        return True
+    if lower.startswith("id") and len(cleaned) > 2 and cleaned[2].isupper():
+        return True
+    return False
+
+
+def parse_cardinality(raw: Any, default: DiagramCardinality) -> DiagramCardinality:
+    """Normaliza representaciones textuales o variantes de cardinalidad hacia el enum canónico."""
+    if not raw:
+        return default
+    val = str(raw).strip()
+    try:
+        return DiagramCardinality(val)
+    except ValueError:
+        pass
+    lower = val.lower()
+    if lower in ("*", "n", "m", "many", "muchos", "0..*", "0..n", "0..m"):
+        return DiagramCardinality.ZERO_OR_MORE
+    if lower in ("1..*", "1..n", "1..m", "+", "one_or_more"):
+        return DiagramCardinality.ONE_OR_MORE
+    if lower in ("0..1", "0..1", "?", "zero_or_one", "optional"):
+        return DiagramCardinality.ZERO_OR_ONE
+    if lower in ("1", "1..1", "uno", "one", "exactly_one"):
+        return DiagramCardinality.EXACTLY_ONE
+    return default
 
 
 @dataclass
@@ -228,7 +269,85 @@ class ActionPlanner:
         validated_actions: list[ValidatedAction] = []
         created_classes_count = 0
 
-        for ai_action in ai_actions:
+        # Identificar posibles clases puente redundantes emitidas como CREATE_CLASS
+        # cuando ya existe una acción CREATE_RELATION M:N en el mismo lote
+        redundant_bridge_classes: set[str] = set()
+        for act in ai_actions:
+            if act.type == AgentActionType.CREATE_RELATION:
+                p = act.payload or {}
+                rel_type = str(p.get("relation_type", "ASSOCIATION")).upper()
+                if rel_type == "ASSOCIATION":
+                    sc = str(p.get("source_cardinality", "")).strip().lower()
+                    tc = str(p.get("target_cardinality", "")).strip().lower()
+                    many_tokens = ("*", "n", "m", "0..*", "1..*")
+                    if any(t in sc for t in many_tokens) and any(t in tc for t in many_tokens):
+                        src_name = str(p.get("source_class_name", "")).strip()
+                        tgt_name = str(p.get("target_class_name", "")).strip()
+                        if src_name and tgt_name:
+                            b_name_1 = generate_bridge_class_name(src_name, tgt_name, [])
+                            b_name_2 = generate_bridge_class_name(tgt_name, src_name, [])
+                            redundant_bridge_classes.add(b_name_1.lower())
+                            redundant_bridge_classes.add(b_name_2.lower())
+                            redundant_bridge_classes.add(f"{src_name}{tgt_name}".lower())
+                            redundant_bridge_classes.add(f"{tgt_name}{src_name}".lower())
+
+        # Separar en las 4 fases canónicas:
+        # Fase 1: Creación y modificación de clases
+        phase_1_actions: list[AiAction] = []
+        # Fase 2: Atributos de clases base (existentes o creadas en Fase 1)
+        phase_2_actions: list[AiAction] = []
+        # Fase 3: Relaciones y posicionamiento
+        phase_3_actions: list[AiAction] = []
+        # Fase 4: Atributos residuales (para clases puente intermedias creadas en Fase 3)
+        phase_4_actions: list[AiAction] = []
+
+        base_class_names = set(classes_by_name.keys())
+        for act in ai_actions:
+            if act.type == AgentActionType.CREATE_CLASS:
+                cname = str((act.payload or {}).get("name", "")).strip().lower()
+                if cname not in redundant_bridge_classes:
+                    base_class_names.add(cname)
+
+        for act in ai_actions:
+            if act.type in (
+                AgentActionType.CREATE_CLASS,
+                AgentActionType.RENAME_CLASS,
+                AgentActionType.DELETE_CLASS,
+            ):
+                if act.type == AgentActionType.CREATE_CLASS:
+                    cname = str((act.payload or {}).get("name", "")).strip().lower()
+                    if cname in redundant_bridge_classes:
+                        logger.info(
+                            "Omitiendo CREATE_CLASS redundante para '%s' ya que se materializará automáticamente mediante relación M:N",
+                            cname,
+                        )
+                        continue
+                phase_1_actions.append(act)
+            elif act.type in (
+                AgentActionType.CREATE_RELATION,
+                AgentActionType.DELETE_RELATION,
+                AgentActionType.RENAME_RELATION,
+                AgentActionType.MOVE_CLASS,
+            ):
+                phase_3_actions.append(act)
+            elif act.type in (
+                AgentActionType.CREATE_ATTRIBUTE,
+                AgentActionType.UPDATE_ATTRIBUTE,
+                AgentActionType.DELETE_ATTRIBUTE,
+            ):
+                target_cname = str((act.payload or {}).get("class_name", "")).strip().lower()
+                if target_cname in base_class_names:
+                    phase_2_actions.append(act)
+                else:
+                    phase_4_actions.append(act)
+            else:
+                phase_3_actions.append(act)
+
+        ordered_actions = (
+            phase_1_actions + phase_2_actions + phase_3_actions + phase_4_actions
+        )
+
+        for ai_action in ordered_actions:
             raw_payload = ai_action.payload or {}
 
             if ai_action.type == AgentActionType.CREATE_CLASS:
@@ -478,6 +597,14 @@ class ActionPlanner:
                 if not attr_name:
                     raise AgentActionValidationException("El nombre del atributo no puede estar vacío.")
 
+                if is_id_or_foreign_key_attribute(attr_name):
+                    logger.info(
+                        "Ignorando atributo '%s' para la clase '%s': los identificadores y claves foráneas se administran automáticamente.",
+                        attr_name,
+                        class_name,
+                    )
+                    continue
+
                 target_pc = classes_by_name.get(class_name.lower())
                 if target_pc is None:
                     raise AgentActionValidationException(
@@ -636,15 +763,15 @@ class ActionPlanner:
                     raise AgentActionValidationException(
                         f"No se encontró la clase destino '{tgt_name}' para la relación."
                     )
-                if src_pc.id == tgt_pc.id:
-                    raise AgentActionValidationException(
-                        "Una relación no puede conectar una clase consigo misma."
-                    )
-
                 try:
                     rel_type = DiagramRelationType(rel_type_str)
                 except ValueError:
                     rel_type = DiagramRelationType.ASSOCIATION
+
+                if src_pc.id == tgt_pc.id and rel_type != DiagramRelationType.ASSOCIATION:
+                    raise AgentActionValidationException(
+                        "Una relación recursiva solo está permitida para relaciones de tipo asociación."
+                    )
 
                 rel_name = str(raw_payload.get("name", "")).strip()
                 if rel_type == DiagramRelationType.ASSOCIATION and not rel_name:
@@ -656,32 +783,69 @@ class ActionPlanner:
                 tgt_card: DiagramCardinality | None = None
 
                 if rel_type == DiagramRelationType.ASSOCIATION:
-                    src_card = (
-                        DiagramCardinality(str(src_card_str))
-                        if src_card_str
-                        else DiagramCardinality.ZERO_OR_MORE
+                    src_card = parse_cardinality(
+                        src_card_str, DiagramCardinality.ZERO_OR_MORE
                     )
-                    tgt_card = (
-                        DiagramCardinality(str(tgt_card_str))
-                        if tgt_card_str
-                        else DiagramCardinality.EXACTLY_ONE
+                    tgt_card = parse_cardinality(
+                        tgt_card_str, DiagramCardinality.EXACTLY_ONE
                     )
 
                 relation_id = uuid4()
-                src_handle = self._select_handle(
-                    raw_payload.get("source_handle"),
-                    source=src_pc,
-                    target=tgt_pc,
-                    usage=handle_usage,
-                    source_side=True,
-                )
-                tgt_handle = self._select_handle(
-                    raw_payload.get("target_handle"),
-                    source=tgt_pc,
-                    target=src_pc,
-                    usage=handle_usage,
-                    source_side=False,
-                )
+                if src_pc.id == tgt_pc.id:
+                    proposed_src = raw_payload.get("source_handle")
+                    proposed_tgt = raw_payload.get("target_handle")
+                    valid_proposed = False
+                    if proposed_src and proposed_tgt:
+                        try:
+                            cand_src = DiagramRelationHandle(str(proposed_src).upper())
+                            cand_tgt = DiagramRelationHandle(str(proposed_tgt).upper())
+                            if cand_src != cand_tgt:
+                                if (
+                                    handle_usage.get((src_pc.id, cand_src), 0) < 2
+                                    and handle_usage.get((src_pc.id, cand_tgt), 0) < 2
+                                ):
+                                    src_handle, tgt_handle = cand_src, cand_tgt
+                                    valid_proposed = True
+                        except ValueError:
+                            pass
+
+                    if not valid_proposed:
+                        pair_candidates = [
+                            (DiagramRelationHandle.RIGHT_TOP, DiagramRelationHandle.RIGHT_BOTTOM),
+                            (DiagramRelationHandle.TOP_LEFT, DiagramRelationHandle.TOP_RIGHT),
+                            (DiagramRelationHandle.LEFT_TOP, DiagramRelationHandle.LEFT_BOTTOM),
+                            (DiagramRelationHandle.BOTTOM_LEFT, DiagramRelationHandle.BOTTOM_RIGHT),
+                            (DiagramRelationHandle.TOP_RIGHT, DiagramRelationHandle.RIGHT_TOP),
+                            (DiagramRelationHandle.RIGHT_BOTTOM, DiagramRelationHandle.BOTTOM_RIGHT),
+                            (DiagramRelationHandle.BOTTOM_LEFT, DiagramRelationHandle.LEFT_BOTTOM),
+                            (DiagramRelationHandle.LEFT_TOP, DiagramRelationHandle.TOP_LEFT),
+                        ]
+                        best_pair = pair_candidates[0]
+                        min_u = float("inf")
+                        for h1, h2 in pair_candidates:
+                            u = handle_usage.get((src_pc.id, h1), 0) + handle_usage.get((src_pc.id, h2), 0)
+                            if u == 0:
+                                best_pair = (h1, h2)
+                                break
+                            if u < min_u:
+                                min_u = u
+                                best_pair = (h1, h2)
+                        src_handle, tgt_handle = best_pair
+                else:
+                    src_handle = self._select_handle(
+                        raw_payload.get("source_handle"),
+                        source=src_pc,
+                        target=tgt_pc,
+                        usage=handle_usage,
+                        source_side=True,
+                    )
+                    tgt_handle = self._select_handle(
+                        raw_payload.get("target_handle"),
+                        source=tgt_pc,
+                        target=src_pc,
+                        usage=handle_usage,
+                        source_side=False,
+                    )
 
                 # Calcular plan determinista de materialización
                 plan = determine_materialization_plan(
@@ -704,7 +868,14 @@ class ActionPlanner:
                     rec_pc = src_pc if rule.receiving_class_id == src_pc.id else tgt_pc
                     ref_pc = tgt_pc if rule.receiving_class_id == src_pc.id else src_pc
                     fk_id = uuid4()
-                    fk_name = f"{ref_pc.name.lower()}_id"
+                    existing_names = {a["name"].lower() for a in rec_pc.attributes}
+                    base_fk_name = f"{ref_pc.name.lower()}_id"
+                    fk_name = base_fk_name
+                    suffix = 2
+                    while fk_name in existing_names:
+                        fk_name = f"{base_fk_name}_{suffix}"
+                        suffix += 1
+
                     fk_pos = len(rec_pc.attributes)
                     fk_data = {
                         "id": str(fk_id),
@@ -752,6 +923,16 @@ class ActionPlanner:
                     fk1_id = uuid4()
                     fk2_id = uuid4()
 
+                    if src_pc.id == tgt_pc.id:
+                        clean_base = src_pc.name.lower()
+                        if clean_base.endswith("_id"):
+                            clean_base = clean_base[:-3]
+                        fk1_name = f"{clean_base}_a_id"
+                        fk2_name = f"{clean_base}_b_id"
+                    else:
+                        fk1_name = f"{src_pc.name.lower()}_id"
+                        fk2_name = f"{tgt_pc.name.lower()}_id"
+
                     materialization["bridge_class"] = {
                         "id": str(bridge_id),
                         "name": bridge_name,
@@ -770,7 +951,7 @@ class ActionPlanner:
                             {
                                 "id": str(fk1_id),
                                 "class_id": str(bridge_id),
-                                "name": f"{src_pc.name.lower()}_id",
+                                "name": fk1_name,
                                 "position": 1,
                                 "referenced_class_id": str(rule.source_class_id),
                                 "relation_id": str(relation_id),
@@ -782,7 +963,7 @@ class ActionPlanner:
                             {
                                 "id": str(fk2_id),
                                 "class_id": str(bridge_id),
-                                "name": f"{tgt_pc.name.lower()}_id",
+                                "name": fk2_name,
                                 "position": 2,
                                 "referenced_class_id": str(rule.target_class_id),
                                 "relation_id": str(relation_id),
@@ -928,19 +1109,44 @@ class ActionPlanner:
         dx = target.position_x - source.position_x
         dy = target.position_y - source.position_y
         if abs(dx) >= abs(dy):
-            sides = (
-                (DiagramRelationHandle.RIGHT_CENTER, DiagramRelationHandle.LEFT_CENTER)
-                if dx >= 0
-                else (DiagramRelationHandle.LEFT_CENTER, DiagramRelationHandle.RIGHT_CENTER)
-            )
+            if dx >= 0:
+                primary = [
+                    DiagramRelationHandle.RIGHT_CENTER,
+                    DiagramRelationHandle.RIGHT_BOTTOM if dy >= 0 else DiagramRelationHandle.RIGHT_TOP,
+                    DiagramRelationHandle.RIGHT_TOP if dy >= 0 else DiagramRelationHandle.RIGHT_BOTTOM,
+                ]
+                adjacent = [
+                    DiagramRelationHandle.BOTTOM_RIGHT if dy >= 0 else DiagramRelationHandle.TOP_RIGHT,
+                ]
+            else:
+                primary = [
+                    DiagramRelationHandle.LEFT_CENTER,
+                    DiagramRelationHandle.LEFT_BOTTOM if dy >= 0 else DiagramRelationHandle.LEFT_TOP,
+                    DiagramRelationHandle.LEFT_TOP if dy >= 0 else DiagramRelationHandle.LEFT_BOTTOM,
+                ]
+                adjacent = [
+                    DiagramRelationHandle.BOTTOM_LEFT if dy >= 0 else DiagramRelationHandle.TOP_LEFT,
+                ]
         else:
-            sides = (
-                (DiagramRelationHandle.BOTTOM_CENTER, DiagramRelationHandle.TOP_CENTER)
-                if dy >= 0
-                else (DiagramRelationHandle.TOP_CENTER, DiagramRelationHandle.BOTTOM_CENTER)
-            )
-        # Cada llamada recibe el centro de la clase que tendrá el handle y el
-        # centro de su contraparte; por eso el primer lado siempre apunta al destino.
-        preferred = sides[0]
-        candidates = [preferred] + [h for h in DiagramRelationHandle if h != preferred]
+            if dy >= 0:
+                primary = [
+                    DiagramRelationHandle.BOTTOM_CENTER,
+                    DiagramRelationHandle.BOTTOM_RIGHT if dx >= 0 else DiagramRelationHandle.BOTTOM_LEFT,
+                    DiagramRelationHandle.BOTTOM_LEFT if dx >= 0 else DiagramRelationHandle.BOTTOM_RIGHT,
+                ]
+                adjacent = [
+                    DiagramRelationHandle.RIGHT_BOTTOM if dx >= 0 else DiagramRelationHandle.LEFT_BOTTOM,
+                ]
+            else:
+                primary = [
+                    DiagramRelationHandle.TOP_CENTER,
+                    DiagramRelationHandle.TOP_RIGHT if dx >= 0 else DiagramRelationHandle.TOP_LEFT,
+                    DiagramRelationHandle.TOP_LEFT if dx >= 0 else DiagramRelationHandle.TOP_RIGHT,
+                ]
+                adjacent = [
+                    DiagramRelationHandle.RIGHT_TOP if dx >= 0 else DiagramRelationHandle.LEFT_TOP,
+                ]
+
+        candidates = primary + adjacent + [h for h in DiagramRelationHandle if h not in primary and h not in adjacent]
         return min(candidates, key=lambda handle: usage.get((source.id, handle), 0))
+

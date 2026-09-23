@@ -3,9 +3,9 @@ import pytest
 from sqlmodel import Session
 
 from app.core.security.auth import AuthUser
-from app.modules.projects.domain.enums.project_member_role import ProjectMemberRole
-from app.modules.projects.domain.enums.project_member_status import ProjectMemberStatus
-from app.modules.projects.infrastructure.persistence.models.project_member_model import (
+from app.modules.collaboration.domain.enums.project_member_role import ProjectMemberRole
+from app.modules.collaboration.domain.enums.project_member_status import ProjectMemberStatus
+from app.modules.collaboration.infrastructure.persistence.models.project_member_model import (
     ProjectMemberModel,
 )
 from app.modules.projects.infrastructure.persistence.models.project_model import (

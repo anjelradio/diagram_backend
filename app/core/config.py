@@ -94,23 +94,40 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
     GEMINI_MODEL_CHAIN: list[str] | str = Field(
         default_factory=lambda: [
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash-lite",
             "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
+            "gemini-3-flash",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-3.8-flash",
         ],
         env="GEMINI_MODEL_CHAIN",
     )
     GEMINI_MAX_RETRY_CYCLES: int = Field(
         default=1, ge=1, env="GEMINI_MAX_RETRY_CYCLES"
     )
+    GEMINI_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=12.0, ge=1.0, env="GEMINI_REQUEST_TIMEOUT_SECONDS"
+    )
 
     @field_validator("GEMINI_MODEL_CHAIN", mode="after")
     @classmethod
     def parse_gemini_models(cls, value: object) -> list[str]:
         if isinstance(value, str):
-            return [m.strip() for m in value.split(",") if m.strip()]
-        return value  # type: ignore[return-value]
+            raw_models = [m.strip() for m in value.split(",") if m.strip()]
+        elif isinstance(value, (list, tuple)):
+            raw_models = [str(m).strip() for m in value if str(m).strip()]
+        else:
+            raw_models = []
+
+        normalized: list[str] = []
+        for m in raw_models:
+            norm = m.lower().replace(" ", "-")
+            norm = norm.replace("flash-light", "flash-lite").replace("flashlight", "flash-lite")
+            normalized.append(norm)
+        return normalized
 
     # ── Cloudinary (Almacenamiento de imágenes) ────────────────────────────────
     CLOUDINARY_CLOUD_NAME: str = Field(default="", env="CLOUDINARY_CLOUD_NAME")

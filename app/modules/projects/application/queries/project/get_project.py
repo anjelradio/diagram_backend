@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.modules.projects.application.services.project_access_policy import (
+from app.modules.collaboration.application.services.project_access_policy import (
     ProjectAccessPolicy,
 )
 from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole

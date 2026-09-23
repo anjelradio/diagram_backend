@@ -1,6 +1,7 @@
 import uuid
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.security.auth import AuthUser, get_current_user
 from app.main import app

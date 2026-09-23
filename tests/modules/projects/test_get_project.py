@@ -5,28 +5,28 @@ from sqlmodel import Session
 
 from app.core.security.auth import AuthUser, get_current_user
 from app.main import app
-from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole
-from app.modules.projects.domain.enums.project_member_role import ProjectMemberRole
-from app.modules.projects.domain.enums.project_member_status import ProjectMemberStatus
-from app.modules.projects.domain.exceptions import ProjectNotFoundException
-from app.modules.projects.infrastructure.persistence.models.project_member_model import (
+from app.modules.collaboration.application.services.project_access_policy import (
+    ProjectAccessPolicy,
+)
+from app.modules.collaboration.domain.enums.project_member_role import ProjectMemberRole
+from app.modules.collaboration.domain.enums.project_member_status import ProjectMemberStatus
+from app.modules.collaboration.infrastructure.persistence.models.project_member_model import (
     ProjectMemberModel,
 )
-from app.modules.projects.infrastructure.persistence.models.project_model import (
-    ProjectModel,
-)
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
+from app.modules.collaboration.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
     SQLModelProjectMemberRepository,
-)
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (
-    SQLModelProjectRepository,
-)
-from app.modules.projects.application.services.project_access_policy import (
-    ProjectAccessPolicy,
 )
 from app.modules.projects.application.queries.project.get_project import (
     GetProjectQuery,
     GetProjectQueryHandler,
+)
+from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole
+from app.modules.projects.domain.exceptions import ProjectNotFoundException
+from app.modules.projects.infrastructure.persistence.models.project_model import (
+    ProjectModel,
+)
+from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (
+    SQLModelProjectRepository,
 )
 
 

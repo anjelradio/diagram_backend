@@ -62,7 +62,7 @@ from app.modules.diagram.infrastructure.realtime.connection_manager import (
     connection_manager,
 )
 from app.modules.projects.domain.exceptions import ProjectNotFoundException
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
+from app.modules.collaboration.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
     SQLModelProjectMemberRepository,
 )
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (

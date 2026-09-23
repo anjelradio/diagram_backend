@@ -1,13 +1,13 @@
 from sqlalchemy import literal
 from sqlmodel import Session, select
 
+from app.modules.collaboration.domain.enums.project_member_status import ProjectMemberStatus
+from app.modules.collaboration.infrastructure.persistence.models.project_member_model import (
+    ProjectMemberModel,
+)
 from app.modules.projects.application.ports.readers.project_list_reader import (
     ProjectListItem,
     ProjectListReader,
-)
-from app.modules.projects.domain.enums.project_member_status import ProjectMemberStatus
-from app.modules.projects.infrastructure.persistence.models.project_member_model import (
-    ProjectMemberModel,
 )
 from app.modules.projects.infrastructure.persistence.models.project_model import (
     ProjectModel,

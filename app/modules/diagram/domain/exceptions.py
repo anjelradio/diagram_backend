@@ -127,6 +127,13 @@ class DiagramRelationSelfReferenceException(ValidationException):
     message = "Una relación no puede tener la misma clase como origen y destino."
 
 
+class SelfReferencingNonAssociationException(ValidationException):
+    """Las relaciones recursivas solo están permitidas para el tipo de relación ASSOCIATION."""
+
+    code = "SELF_REFERENCING_NON_ASSOCIATION"
+    message = "Las relaciones recursivas (auto-referenciadas) solo están permitidas para el tipo de relación ASSOCIATION."
+
+
 class InvalidDiagramRelationNameException(ValidationException):
     """El nombre de la relación es inválido."""
 

@@ -49,21 +49,79 @@ def test_create_valid_association():
     assert not rel.is_many_to_many
 
 
-def test_reject_self_reference():
+def test_allow_recursive_association():
+    project_id = uuid.uuid4()
+    class_id = uuid.uuid4()
+    rel_id = uuid.uuid4()
+
+    rel = DiagramRelation.create(
+        id=rel_id,
+        project_id=project_id,
+        source_class_id=class_id,
+        target_class_id=class_id,
+        relation_type=DiagramRelationType.ASSOCIATION,
+        source_handle=DiagramRelationHandle.RIGHT_TOP,
+        target_handle=DiagramRelationHandle.RIGHT_BOTTOM,
+        name="Auto-relación",
+        source_cardinality=DiagramCardinality.ZERO_OR_ONE,
+        target_cardinality=DiagramCardinality.ZERO_OR_MORE,
+    )
+
+    assert rel.id == rel_id
+    assert rel.source_class_id == class_id
+    assert rel.target_class_id == class_id
+    assert rel.source_handle == DiagramRelationHandle.RIGHT_TOP
+    assert rel.target_handle == DiagramRelationHandle.RIGHT_BOTTOM
+    assert rel.name == "Auto-relación"
+
+
+@pytest.mark.parametrize(
+    "rel_type",
+    [
+        DiagramRelationType.AGGREGATION,
+        DiagramRelationType.COMPOSITION,
+        DiagramRelationType.GENERALIZATION,
+        DiagramRelationType.REALIZATION,
+        DiagramRelationType.DEPENDENCY,
+    ],
+)
+def test_reject_self_reference_for_non_association(rel_type):
+    from app.modules.diagram.domain.exceptions import (
+        SelfReferencingNonAssociationException,
+    )
+
     project_id = uuid.uuid4()
     class_id = uuid.uuid4()
 
-    with pytest.raises(DiagramRelationSelfReferenceException):
+    with pytest.raises(SelfReferencingNonAssociationException):
+        DiagramRelation.create(
+            id=uuid.uuid4(),
+            project_id=project_id,
+            source_class_id=class_id,
+            target_class_id=class_id,
+            relation_type=rel_type,
+            source_handle=DiagramRelationHandle.RIGHT_TOP,
+            target_handle=DiagramRelationHandle.RIGHT_BOTTOM,
+            name="",
+        )
+
+
+def test_reject_self_reference_with_same_handle():
+    project_id = uuid.uuid4()
+    class_id = uuid.uuid4()
+
+    with pytest.raises(InvalidDiagramRelationHandleException):
         DiagramRelation.create(
             id=uuid.uuid4(),
             project_id=project_id,
             source_class_id=class_id,
             target_class_id=class_id,
             relation_type=DiagramRelationType.ASSOCIATION,
-            source_handle=DiagramRelationHandle.TOP_CENTER,
-            target_handle=DiagramRelationHandle.BOTTOM_CENTER,
-            source_cardinality=DiagramCardinality.EXACTLY_ONE,
-            target_cardinality=DiagramCardinality.EXACTLY_ONE,
+            source_handle=DiagramRelationHandle.RIGHT_TOP,
+            target_handle=DiagramRelationHandle.RIGHT_TOP,
+            name="Auto",
+            source_cardinality=DiagramCardinality.ZERO_OR_ONE,
+            target_cardinality=DiagramCardinality.ZERO_OR_MORE,
         )
 
 

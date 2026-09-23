@@ -119,3 +119,117 @@ def test_create_diagram_relation_api_contracts(
         json=invalid_schema_payload,
     )
     assert resp_422.status_code == 422
+
+
+def test_create_self_referencing_relation_api(
+    client: TestClient,
+    session: Session,
+    test_project: ProjectModel,
+    owner_user: AuthUser,
+):
+    project_id = test_project.id
+    app.dependency_overrides[get_current_user] = lambda: owner_user
+
+    c1 = create_test_class(session, project_id, name="Category")
+    create_test_attribute(session, c1.id, name="id", position=0, is_primary_key=True)
+    session.commit()
+
+    rel_id = str(uuid.uuid4())
+    fk_id = str(uuid.uuid4())
+
+    # 1. Self-referencing 1:N association with is_nullable=True
+    self_payload = {
+        "id": rel_id,
+        "name": "padre_de",
+        "relation_type": "ASSOCIATION",
+        "source": {
+            "class_id": str(c1.id),
+            "handle": "RIGHT_TOP",
+            "cardinality": "0..1",
+        },
+        "target": {
+            "class_id": str(c1.id),
+            "handle": "RIGHT_BOTTOM",
+            "cardinality": "0..*",
+        },
+        "materialization": {
+            "strategy": "FOREIGN_KEY",
+            "foreign_attributes": [
+                {
+                    "id": fk_id,
+                    "class_id": str(c1.id),
+                    "name": "parent_category_id",
+                    "data_type": "UUID",
+                    "position": 1,
+                    "is_primary_key": False,
+                    "is_nullable": True,
+                    "is_foreign_key": True,
+                    "referenced_class_id": str(c1.id),
+                    "relation_id": rel_id,
+                }
+            ],
+        },
+    }
+
+    resp = client.post(f"/api/projects/{project_id}/diagram/relations", json=self_payload)
+    assert resp.status_code == 201
+
+    # Verify snapshot contains relation and self-referencing nullable FK
+    resp_snap = client.get(f"/api/projects/{project_id}/diagram")
+    assert resp_snap.status_code == 200
+    classes = resp_snap.json()["classes"]
+    relations = resp_snap.json()["relations"]
+    assert len(relations) == 1
+    assert relations[0]["source"]["class_id"] == str(c1.id)
+    assert relations[0]["target"]["class_id"] == str(c1.id)
+
+    cat_class = next(c for c in classes if c["id"] == str(c1.id))
+    assert len(cat_class["attributes"]) == 2
+    fk_attr = next(a for a in cat_class["attributes"] if a["id"] == fk_id)
+    assert fk_attr["is_foreign_key"] is True
+    assert fk_attr["referenced_class_id"] == str(c1.id)
+    assert fk_attr["is_nullable"] is True
+
+    # 2. Reject self-referencing GENERALIZATION
+    gen_id = str(uuid.uuid4())
+    gen_payload = {
+        "id": gen_id,
+        "name": "",
+        "relation_type": "GENERALIZATION",
+        "source": {
+            "class_id": str(c1.id),
+            "handle": "TOP_CENTER",
+            "cardinality": None,
+        },
+        "target": {
+            "class_id": str(c1.id),
+            "handle": "BOTTOM_CENTER",
+            "cardinality": None,
+        },
+        "materialization": {
+            "strategy": "SHARED_PRIMARY_KEY",
+            "shared_primary_key": {
+                "attribute_id": str(uuid.uuid4()),
+                "class_id": str(c1.id),
+                "referenced_class_id": str(c1.id),
+                "relation_id": gen_id,
+            },
+        },
+    }
+    resp_gen = client.post(f"/api/projects/{project_id}/diagram/relations", json=gen_payload)
+    assert resp_gen.status_code == 422 or resp_gen.status_code == 400
+
+    # 3. Reject self-referencing with identical handles
+    same_handle_id = str(uuid.uuid4())
+    same_handle_payload = dict(self_payload)
+    same_handle_payload["id"] = same_handle_id
+    same_handle_payload["source"]["handle"] = "RIGHT_TOP"
+    same_handle_payload["target"]["handle"] = "RIGHT_TOP"
+    same_handle_payload["materialization"]["foreign_attributes"][0]["id"] = str(uuid.uuid4())
+    same_handle_payload["materialization"]["foreign_attributes"][0]["relation_id"] = same_handle_id
+
+    resp_same_handle = client.post(
+        f"/api/projects/{project_id}/diagram/relations", json=same_handle_payload
+    )
+    assert resp_same_handle.status_code == 422 or resp_same_handle.status_code == 400
+

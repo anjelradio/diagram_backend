@@ -1,5 +1,5 @@
 from app.modules.code_generation.application.services.generators.java_identifier_sanitizer import (
-    map_data_type,
+    sanitize_class_attributes,
     to_pascal_case,
 )
 from app.modules.code_generation.domain.value_objects.spring_boot_project_config import (
@@ -21,13 +21,10 @@ class RepositoryGenerator:
         class_name = to_pascal_case(class_dto.name)
         repo_name = f"{class_name}Repository"
 
-        # Determinar tipo de la PK
-        pk_type = "Long"
-        pk_import = None
-        for attr in class_dto.attributes:
-            if attr.is_primary_key:
-                pk_type, pk_import = map_data_type(attr.data_type)
-                break
+        sanitized_attrs = sanitize_class_attributes(class_dto.attributes)
+        pk_attr = next(sa for sa in sanitized_attrs if sa.is_primary_key)
+        pk_type = pk_attr.java_type
+        pk_import = pk_attr.java_import
 
         imports = [
             "org.springframework.data.jpa.repository.JpaRepository",

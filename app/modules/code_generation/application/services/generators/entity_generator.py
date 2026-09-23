@@ -1,10 +1,13 @@
 from uuid import UUID
 
 from app.modules.code_generation.application.services.generators.java_identifier_sanitizer import (
-    map_data_type,
+    sanitize_class_attributes,
     to_camel_case,
     to_pascal_case,
     to_snake_case,
+)
+from app.modules.code_generation.application.services.generators.relation_resolver import (
+    resolve_entity_dependencies,
 )
 from app.modules.code_generation.domain.value_objects.spring_boot_project_config import (
     GeneratedFile,
@@ -35,54 +38,22 @@ class EntityGenerator:
             "jakarta.persistence.*",
         }
 
-        fields: list[dict] = []
-        has_explicit_pk = False
+        sanitized_attrs = sanitize_class_attributes(class_dto.attributes)
+        for sa in sanitized_attrs:
+            if sa.java_import:
+                imports.add(sa.java_import)
 
-        for attr in class_dto.attributes:
-            field_name = to_camel_case(attr.name)
-            col_name = to_snake_case(attr.name)
-            java_type, imp = map_data_type(attr.data_type)
-            if imp:
-                imports.add(imp)
-
-            is_pk = attr.is_primary_key
-            if is_pk:
-                has_explicit_pk = True
-
-            fields.append({
-                "name": field_name,
-                "type": java_type,
-                "column": col_name,
-                "is_pk": is_pk,
-                "is_nullable": attr.is_nullable,
-            })
-
-        # Si no tiene PK explícita, agregamos id por defecto
-        if not has_explicit_pk:
-            fields.insert(0, {
-                "name": "id",
-                "type": "Long",
-                "column": "id",
-                "is_pk": True,
-                "is_nullable": False,
-            })
-
-        # Procesar relaciones ManyToOne (cuando esta clase es target de 1:N o source de N:1)
+        # Procesar relaciones ManyToOne legítimas resueltas
         rel_fields: list[dict] = []
-        for rel in relations:
-            # 1:N -> Target es Many, Source es One
-            if rel.target.class_id == class_dto.id:
-                source_class = all_classes.get(rel.source.class_id)
-                if source_class:
-                    source_name = to_pascal_case(source_class.name)
-                    field_name = to_camel_case(source_class.name)
-                    col_name = f"{to_snake_case(source_class.name)}_id"
-                    rel_fields.append({
-                        "name": field_name,
-                        "type": source_name,
-                        "column": col_name,
-                        "rel_type": "ManyToOne",
-                    })
+        if all_classes:
+            deps = resolve_entity_dependencies(class_dto, all_classes, relations)
+            for dep in deps:
+                rel_fields.append({
+                    "name": dep.field_name,
+                    "type": dep.referenced_class_name,
+                    "column": dep.fk_column_name,
+                    "rel_type": "ManyToOne",
+                })
 
         code_lines = [
             f"package {self.config.package_name}.model;",
@@ -101,24 +72,28 @@ class EntityGenerator:
             "",
         ])
 
+        existing_cols = {sa.column_name for sa in sanitized_attrs}
+
         # Definir campos
-        for f in fields:
-            if f["is_pk"]:
+        for sa in sanitized_attrs:
+            if sa.is_primary_key:
                 code_lines.append("    @Id")
-                if f["type"] in ("Long", "Integer"):
+                if sa.java_type in ("Long", "Integer"):
                     code_lines.append("    @GeneratedValue(strategy = GenerationType.IDENTITY)")
-                elif f["type"] == "UUID":
-                    code_lines.append("    @GeneratedValue(strategy = GenerationType.UUID)")
+                code_lines.append(f'    @Column(name = "{sa.column_name}", nullable = false, updatable = false)')
             else:
-                nullable_str = "true" if f["is_nullable"] else "false"
-                code_lines.append(f'    @Column(name = "{f["column"]}", nullable = {nullable_str})')
-            code_lines.append(f'    private {f["type"]} {f["name"]};')
+                nullable_str = "true" if sa.is_nullable else "false"
+                code_lines.append(f'    @Column(name = "{sa.column_name}", nullable = {nullable_str})')
+            code_lines.append(f'    private {sa.java_type} {sa.field_name};')
             code_lines.append("")
 
         # Campos de relaciones
         for rf in rel_fields:
             code_lines.append("    @ManyToOne(fetch = FetchType.LAZY)")
-            code_lines.append(f'    @JoinColumn(name = "{rf["column"]}")')
+            if rf["column"] in existing_cols:
+                code_lines.append(f'    @JoinColumn(name = "{rf["column"]}", insertable = false, updatable = false)')
+            else:
+                code_lines.append(f'    @JoinColumn(name = "{rf["column"]}")')
             code_lines.append(f'    private {rf["type"]} {rf["name"]};')
             code_lines.append("")
 
@@ -129,25 +104,29 @@ class EntityGenerator:
             "",
         ])
 
-        # Getters y Setters
-        all_fields = fields + rel_fields
-        for f in all_fields:
-            fname = f["name"]
-            ftype = f["type"]
-            method_suffix = fname[0].upper() + fname[1:] if len(fname) > 1 else fname.upper()
-
-            # Getter
+        # Getters y Setters para atributos sanitizados
+        for sa in sanitized_attrs:
             code_lines.extend([
-                f"    public {ftype} get{method_suffix}() {{",
-                f"        return this.{fname};",
+                f"    public {sa.java_type} get{sa.method_suffix}() {{",
+                f"        return this.{sa.field_name};",
+                "    }",
+                "",
+                f"    public void set{sa.method_suffix}({sa.java_type} {sa.field_name}) {{",
+                f"        this.{sa.field_name} = {sa.field_name};",
                 "    }",
                 "",
             ])
 
-            # Setter
+        # Getters y Setters para relaciones
+        for rf in rel_fields:
+            rf_suffix = rf["name"][0].upper() + rf["name"][1:] if len(rf["name"]) > 1 else rf["name"].upper()
             code_lines.extend([
-                f"    public void set{method_suffix}({ftype} {fname}) {{",
-                f"        this.{fname} = {fname};",
+                f"    public {rf['type']} get{rf_suffix}() {{",
+                f"        return this.{rf['name']};",
+                "    }",
+                "",
+                f"    public void set{rf_suffix}({rf['type']} {rf['name']}) {{",
+                f"        this.{rf['name']} = {rf['name']};",
                 "    }",
                 "",
             ])

@@ -57,7 +57,7 @@ from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagra
 from app.modules.diagram.infrastructure.api.dependencies.class_lock import (
     ensure_class_is_editable,
 )
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
+from app.modules.collaboration.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
     SQLModelProjectMemberRepository,
 )
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (

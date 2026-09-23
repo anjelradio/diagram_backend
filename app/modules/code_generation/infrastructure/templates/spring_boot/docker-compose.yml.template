@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: {{artifact_id}}-db
+    environment:
+      POSTGRES_DB: {{database_name}}
+      POSTGRES_USER: {{database_username}}
+      POSTGRES_PASSWORD: {{database_password}}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{database_username}} -d {{database_name}}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: {{artifact_id}}-app
+    ports:
+      - "{{server_port}}:{{server_port}}"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: {{database_username}}
+      DB_PASSWORD: {{database_password}}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

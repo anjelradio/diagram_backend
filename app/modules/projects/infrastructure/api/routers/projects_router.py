@@ -1,8 +1,25 @@
 from uuid import UUID
-from fastapi import APIRouter, status, Response
+from fastapi import APIRouter, File, Response, UploadFile, status
 
-from app.core.config import settings
 from app.core.dependencies import CurrentUser, DBSession, UoWDep
+from app.modules.collaboration.application.services.project_access_policy import (
+    ProjectAccessPolicy,
+)
+from app.modules.collaboration.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
+    SQLModelProjectMemberRepository,
+)
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_attribute_repository import (
+    SQLModelDiagramAttributeRepository,
+)
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_class_repository import (
+    SQLModelDiagramClassRepository,
+)
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_relation_repository import (
+    SQLModelDiagramRelationRepository,
+)
+from app.modules.diagram.infrastructure.persistence.readers.sqlmodel_diagram_snapshot_reader import (
+    SQLModelDiagramSnapshotReader,
+)
 from app.modules.projects.application.queries.project.get_project import (
     GetProjectQuery,
     GetProjectQueryHandler,
@@ -10,13 +27,6 @@ from app.modules.projects.application.queries.project.get_project import (
 from app.modules.projects.application.queries.project.list_projects import (
     ListProjectsQuery,
     ListProjectsQueryHandler,
-)
-from app.modules.projects.application.services.project_access_policy import (
-    ProjectAccessPolicy,
-)
-from app.modules.projects.application.use_cases.invitation.create_or_refresh_invitation import (
-    CreateOrRefreshInvitationCommand,
-    CreateOrRefreshInvitationUseCase,
 )
 from app.modules.projects.application.use_cases.project.create_project import (
     CreateProjectCommand,
@@ -26,18 +36,17 @@ from app.modules.projects.application.use_cases.project.delete_project import (
     DeleteProjectCommand,
     DeleteProjectUseCase,
 )
+from app.modules.projects.application.use_cases.project.export_project import (
+    ExportProjectCommand,
+    ExportProjectUseCase,
+)
+from app.modules.projects.application.use_cases.project.import_project import (
+    ImportProjectCommand,
+    ImportProjectUseCase,
+)
 from app.modules.projects.application.use_cases.project.update_project import (
     UpdateProjectCommand,
     UpdateProjectUseCase,
-)
-from app.modules.projects.application.use_cases.project_member.join_project_by_code import (
-    JoinProjectByCodeCommand,
-    JoinProjectByCodeUseCase,
-)
-from app.modules.projects.infrastructure.api.schemas.invitation_schemas import (
-    InvitationResponse,
-    JoinProjectRequest,
-    JoinProjectResponse,
 )
 from app.modules.projects.infrastructure.api.schemas.project_schemas import (
     ProjectCreatedResponse,
@@ -48,12 +57,6 @@ from app.modules.projects.infrastructure.api.schemas.project_schemas import (
 )
 from app.modules.projects.infrastructure.persistence.readers.sqlmodel_project_list_reader import (
     SQLModelProjectListReader,
-)
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_invitation_repository import (
-    SQLModelInvitationRepository,
-)
-from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
-    SQLModelProjectMemberRepository,
 )
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (
     SQLModelProjectRepository,
@@ -79,6 +82,38 @@ def create_project(
     command = CreateProjectCommand(owner_id=current_user.user_id)
     project_id = use_case.execute(command)
 
+    return ProjectCreatedResponse(id=project_id)
+
+
+@router.post(
+    "/import",
+    response_model=ProjectCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Importar un proyecto desde archivo XML/XMI compatible con Enterprise Architect",
+)
+async def import_project(
+    current_user: CurrentUser,
+    db: DBSession,
+    uow: UoWDep,
+    file: UploadFile = File(...),
+) -> ProjectCreatedResponse:
+    """Importa un proyecto desde un archivo XMI/XML y crea sus clases, atributos y relaciones."""
+    content = await file.read()
+    project_repo = SQLModelProjectRepository(db)
+    class_repo = SQLModelDiagramClassRepository(db)
+    attr_repo = SQLModelDiagramAttributeRepository(db)
+    rel_repo = SQLModelDiagramRelationRepository(db)
+
+    use_case = ImportProjectUseCase(
+        project_repository=project_repo,
+        diagram_class_repository=class_repo,
+        diagram_attribute_repository=attr_repo,
+        diagram_relation_repository=rel_repo,
+        uow=uow,
+    )
+    project_id = use_case.execute(
+        ImportProjectCommand(user_id=current_user.user_id, xml_content=content)
+    )
     return ProjectCreatedResponse(id=project_id)
 
 
@@ -148,66 +183,6 @@ def get_project(
     )
 
 
-@router.post(
-    "/join",
-    response_model=JoinProjectResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Unirse a un proyecto mediante código",
-)
-def join_project(
-    payload: JoinProjectRequest,
-    current_user: CurrentUser,
-    db: DBSession,
-    uow: UoWDep,
-) -> JoinProjectResponse:
-    """Valida el código de invitación e incorpora al usuario como colaborador lector."""
-    project_repo = SQLModelProjectRepository(db)
-    invitation_repo = SQLModelInvitationRepository(db)
-    member_repo = SQLModelProjectMemberRepository(db)
-
-    use_case = JoinProjectByCodeUseCase(
-        project_repository=project_repo,
-        invitation_repository=invitation_repo,
-        project_member_repository=member_repo,
-        uow=uow,
-    )
-    command = JoinProjectByCodeCommand(code=payload.code, user_id=current_user.user_id)
-    result = use_case.execute(command)
-
-    return JoinProjectResponse(project_id=result.project_id)
-
-
-
-@router.post(
-    "/{project_id}/invitations",
-    response_model=InvitationResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Generar o reutilizar invitación a un proyecto",
-)
-def create_or_refresh_invitation(
-    project_id: UUID,
-    current_user: CurrentUser,
-    db: DBSession,
-    uow: UoWDep,
-) -> InvitationResponse:
-    """Devuelve la invitación activa o genera un nuevo código temporal si ha vencido."""
-    project_repo = SQLModelProjectRepository(db)
-    invitation_repo = SQLModelInvitationRepository(db)
-
-    use_case = CreateOrRefreshInvitationUseCase(
-        project_repository=project_repo,
-        invitation_repository=invitation_repo,
-        uow=uow,
-        expiration_days=settings.INVITATION_EXPIRATION_DAYS,
-    )
-    command = CreateOrRefreshInvitationCommand(
-        project_id=project_id, user_id=current_user.user_id
-    )
-    dto = use_case.execute(command)
-
-    return InvitationResponse(code=dto.code, expires_at=dto.expires_at)
-
-
 @router.patch(
     "/{project_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -258,6 +233,50 @@ def delete_project(
 
 
 @router.get(
+    "/{project_id}/export",
+    status_code=status.HTTP_200_OK,
+    summary="Exportar diagrama de proyecto a archivo XMI 2.1 compatible con Enterprise Architect",
+    responses={
+        200: {
+            "content": {"application/xml": {}},
+            "description": "Archivo XML/XMI con diagrama descargable.",
+        }
+    },
+)
+def export_project(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DBSession,
+) -> Response:
+    """Genera y descarga el archivo XML/XMI del proyecto."""
+    project_repo = SQLModelProjectRepository(db)
+    member_repo = SQLModelProjectMemberRepository(db)
+    access_policy = ProjectAccessPolicy(
+        project_repository=project_repo,
+        project_member_repository=member_repo,
+    )
+    snapshot_reader = SQLModelDiagramSnapshotReader(db)
+    use_case = ExportProjectUseCase(
+        project_access_policy=access_policy,
+        diagram_snapshot_reader=snapshot_reader,
+    )
+
+    command = ExportProjectCommand(
+        project_id=project_id,
+        user_id=current_user.user_id,
+    )
+    result = use_case.execute(command)
+
+    return Response(
+        content=result.xml_content,
+        media_type="application/xml; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.file_name}"',
+        },
+    )
+
+
+@router.get(
     "/{project_id}/assistant/activities",
     status_code=status.HTTP_200_OK,
     summary="Listar historial de actividades del asistente (alias en /api/projects)",
@@ -276,4 +295,3 @@ def list_project_activities_alias(
         current_user=current_user,
         uow=uow,
     )
-

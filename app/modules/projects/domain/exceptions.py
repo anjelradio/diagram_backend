@@ -1,7 +1,7 @@
-"""Excepciones de dominio para el módulo de proyectos y colaboradores."""
+"""Excepciones de dominio para el módulo de proyectos."""
 
 from app.shared.domain.exceptions import (
-    ConflictException,
+    DomainException,
     ForbiddenException,
     NotFoundException,
     ValidationException,
@@ -22,55 +22,22 @@ class ProjectNotOwnedException(ForbiddenException):
     message = "No tienes permisos de propietario sobre este proyecto."
 
 
-class InvitationNotFoundException(NotFoundException):
-    """La invitación solicitada no existe, no pertenece al proyecto o está vencida."""
-
-    code = "INVITATION_NOT_FOUND"
-    message = "La invitación no fue encontrada o no está disponible."
-
-
-class ProjectMemberNotFoundException(NotFoundException):
-    """El colaborador no fue encontrado en el proyecto."""
-
-    code = "PROJECT_MEMBER_NOT_FOUND"
-    message = "El participante no fue encontrado en este proyecto."
-
-
-class UserAlreadyMemberException(ConflictException):
-    """El usuario ya participa activamente en el proyecto."""
-
-    code = "USER_ALREADY_MEMBER"
-    message = "Ya eres un participante activo en este proyecto."
-
-
-class UserBannedException(ForbiddenException):
-    """El usuario ha sido bloqueado en el proyecto y no puede unirse."""
-
-    code = "USER_BANNED"
-    message = "Has sido bloqueado en este proyecto y no puedes ingresar."
-
-
-class CannotJoinOwnProjectException(ConflictException):
-    """El propietario del proyecto no puede unirse como colaborador a su propio proyecto."""
-
-    code = "CANNOT_JOIN_OWN_PROJECT"
-    message = "El propietario no puede unirse como colaborador a su propio proyecto."
-
-
 class InvalidProjectNameException(ValidationException):
     """El nombre del proyecto no cumple con los requisitos de longitud o contenido."""
 
     code = "INVALID_PROJECT_NAME"
 
 
-class InvalidInvitationCodeException(ValidationException):
-    """El código de invitación debe ser alfanumérico de 10 caracteres."""
+class InvalidProjectFileException(ValidationException):
+    """El archivo no contiene un diagrama de clases UML válido compatible con Enterprise Architect."""
 
-    code = "INVALID_INVITATION_CODE"
-    message = "El código de invitación debe ser alfanumérico de 10 caracteres."
+    code = "INVALID_PROJECT_FILE"
+    message = "El archivo no contiene un diagrama de clases UML válido compatible con Enterprise Architect."
 
 
-class InvalidMemberTransitionException(ConflictException):
-    """La transición de rol o estado del participante no es válida."""
+class ProjectExportFailedException(DomainException):
+    """Ocurrió un error al generar la exportación XMI del proyecto."""
 
-    code = "INVALID_MEMBER_TRANSITION"
+    code = "PROJECT_EXPORT_FAILED"
+    message = "No se pudo generar la exportación XMI del proyecto."
+

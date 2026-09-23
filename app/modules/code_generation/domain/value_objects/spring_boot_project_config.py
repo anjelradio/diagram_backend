@@ -7,8 +7,8 @@ class SpringBootProjectConfig:
 
     project_name: str
     artifact_id: str = "backend-service"
-    group_id: str = "com.example"
-    package_name: str = "com.example.backend"
+    group_id: str = "app"
+    package_name: str = "app.backend"
     java_version: str = "17"
     spring_boot_version: str = "3.3.4"
     database_name: str = "app_db"

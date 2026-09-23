@@ -125,13 +125,24 @@ def determine_materialization_plan(
             DiagramCardinality.ONE_OR_MORE,
         )
 
-        # Caso N:M
+        # Caso N:M (tanto normal como reflexivo)
         if source_many and target_many:
             return MaterializationPlan(
                 strategy=MaterializationStrategy.BRIDGE_CLASS,
                 bridge_class=BridgeClassRule(
                     source_class_id=source_class_id,
                     target_class_id=target_class_id,
+                ),
+            )
+
+        # Caso Recursivo (Auto-asociación 1:1 o 1:N)
+        if source_class_id == target_class_id:
+            return MaterializationPlan(
+                strategy=MaterializationStrategy.FOREIGN_KEY,
+                foreign_key=ForeignKeyRule(
+                    receiving_class_id=source_class_id,
+                    referenced_class_id=source_class_id,
+                    is_nullable=True,
                 ),
             )
 
@@ -311,6 +322,7 @@ def validate_relation_materialization(
         # Validar las dos FK de la clase puente
         referenced_ids = set()
         positions = set()
+        fk_names = set()
         for fa in bridge_foreign_attrs:
             if UUID(str(fa["class_id"])) != bridge_id:
                 raise InvalidDiagramRelationMaterializationException()
@@ -326,6 +338,10 @@ def validate_relation_materialization(
             ref_id = UUID(str(fa["referenced_class_id"]))
             referenced_ids.add(ref_id)
             positions.add(int(fa.get("position", 0)))
+            fk_name = str(fa.get("name", "")).strip().lower()
+            if not fk_name or fk_name in fk_names:
+                raise InvalidDiagramRelationMaterializationException()
+            fk_names.add(fk_name)
 
         expected_refs = {bridge_rule.source_class_id, bridge_rule.target_class_id}
         if referenced_ids != expected_refs:

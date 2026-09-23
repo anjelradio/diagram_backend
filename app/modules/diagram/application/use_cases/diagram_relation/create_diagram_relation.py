@@ -28,7 +28,9 @@ from app.modules.diagram.domain.exceptions import (
     DiagramRelationIdConflictException,
     DiagramRelationSelfReferenceException,
     DuplicateGeneralizationException,
+    InvalidDiagramRelationHandleException,
     InvalidDiagramRelationMaterializationException,
+    SelfReferencingNonAssociationException,
 )
 from app.modules.diagram.domain.repositories.diagram_attribute_repository import (
     DiagramAttributeRepository,
@@ -87,7 +89,12 @@ class CreateDiagramRelationUseCase:
 
         # 2. Invariante de autorrelación
         if command.source_class_id == command.target_class_id:
-            raise DiagramRelationSelfReferenceException()
+            if command.relation_type != DiagramRelationType.ASSOCIATION:
+                raise SelfReferencingNonAssociationException()
+            if command.source_handle == command.target_handle:
+                raise InvalidDiagramRelationHandleException(
+                    "Una relación recursiva debe utilizar handles distintos en origen y destino."
+                )
 
         # 3. Comprobar que las clases existan y pertenezcan al proyecto
         source_class = self.diagram_class_repository.find_by_id(command.source_class_id)

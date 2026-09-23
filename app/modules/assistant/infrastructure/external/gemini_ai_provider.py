@@ -59,12 +59,6 @@ class GeminiAiProvider(AiProvider):
             text="Escucha el audio adjunto, transcribe la orden del usuario y genera el plan de acciones para el diagrama en formato JSON."
         )
 
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            temperature=0.1,
-        )
-
         last_error: Exception | None = None
 
         for cycle in range(self.max_cycles):
@@ -75,6 +69,7 @@ class GeminiAiProvider(AiProvider):
                         model_name,
                         cycle + 1,
                     )
+                    config = self._build_model_config(system_prompt, model_name)
                     response = await asyncio.wait_for(
                         self.client.aio.models.generate_content(
                             model=model_name,
@@ -146,12 +141,6 @@ class GeminiAiProvider(AiProvider):
         )
         text_prompt_part = types.Part.from_text(text=instruction_text)
 
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            temperature=0.1,
-        )
-
         last_error: Exception | None = None
 
         for cycle in range(self.max_cycles):
@@ -162,6 +151,7 @@ class GeminiAiProvider(AiProvider):
                         model_name,
                         cycle + 1,
                     )
+                    config = self._build_model_config(system_prompt, model_name)
                     response = await asyncio.wait_for(
                         self.client.aio.models.generate_content(
                             model=model_name,
@@ -194,6 +184,27 @@ class GeminiAiProvider(AiProvider):
         )
         raise AiServiceUnavailableException(
             f"No fue posible procesar la imagen con ningún modelo disponible: {last_error}"
+        )
+
+    def _build_model_config(
+        self, system_prompt: str, model_name: str
+    ) -> types.GenerateContentConfig:
+        """Construye la configuración óptima para cada modelo.
+
+        Deshabilita el presupuesto de pensamiento (thinking_budget=0) en modelos que
+        soportan razonamiento extendido para acelerar drásticamente la respuesta (evitando
+        que el modelo pase decenas de segundos en fase de pensamiento oculto), excepto en
+        gemini-3.5-flash-lite que no soporta thinking_config y genera 400 INVALID_ARGUMENT.
+        """
+        thinking_cfg = None
+        if model_name != "gemini-3.5-flash-lite":
+            thinking_cfg = types.ThinkingConfig(thinking_budget=0)
+
+        return types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            temperature=0.1,
+            thinking_config=thinking_cfg,
         )
 
     def _build_system_prompt(

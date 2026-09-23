@@ -97,7 +97,7 @@ class Settings(BaseSettings):
             "gemini-3.1-flash-lite",
             "gemini-3.5-flash-lite",
             "gemini-2.5-flash",
-            "gemini-3-flash",
+            "gemini-3-flash-preview",
             "gemini-3.5-flash",
             "gemini-3.6-flash",
             "gemini-3.7-flash",
@@ -109,7 +109,7 @@ class Settings(BaseSettings):
         default=1, ge=1, env="GEMINI_MAX_RETRY_CYCLES"
     )
     GEMINI_REQUEST_TIMEOUT_SECONDS: float = Field(
-        default=12.0, ge=1.0, env="GEMINI_REQUEST_TIMEOUT_SECONDS"
+        default=25.0, ge=1.0, env="GEMINI_REQUEST_TIMEOUT_SECONDS"
     )
 
     @field_validator("GEMINI_MODEL_CHAIN", mode="after")
@@ -126,6 +126,8 @@ class Settings(BaseSettings):
         for m in raw_models:
             norm = m.lower().replace(" ", "-")
             norm = norm.replace("flash-light", "flash-lite").replace("flashlight", "flash-lite")
+            if norm in ("gemini-3-flash", "3-flash"):
+                norm = "gemini-3-flash-preview"
             normalized.append(norm)
         return normalized
 

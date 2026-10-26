@@ -34,37 +34,10 @@ class ConnectionManager:
         self.rooms: dict[UUID, ProjectRoomState] = {}
         self._lock = asyncio.Lock()
 
-    @staticmethod
-    def _rehydrate_agent_lock(project_id: UUID, room: ProjectRoomState) -> None:
-        """Recupera un lock persistido cuando la sala se crea tras una reconexión."""
-        if room.agent_lock is not None:
-            return
-        try:
-            from sqlmodel import Session
-
-            from app.core.database import engine
-            from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_activity_repository import (
-                SQLModelAgentActivityRepository,
-            )
-
-            with Session(engine) as db:
-                activity = SQLModelAgentActivityRepository(db).find_active_by_project_id(
-                    project_id
-                )
-            if activity is not None:
-                # AgentActivity no almacena el iniciador; el identificador de
-                # actividad sigue siendo la correlación autoritativa.
-                room.set_agent_lock("assistant", activity.id)
-        except Exception:
-            # La conexión no debe fallar por una consulta de recuperación. El
-            # monitor/cliente podrá reintentar en la siguiente reconexión.
-            return
-
     async def connect(self, session: ClientSession) -> None:
         await session.websocket.accept()
         async with self._lock:
             room = self.rooms.setdefault(session.project_id, ProjectRoomState(session.project_id))
-            self._rehydrate_agent_lock(session.project_id, room)
             peers = self.sessions.setdefault(session.project_id, [])
             is_first_session = not any(p.user_id == session.user_id for p in peers)
             

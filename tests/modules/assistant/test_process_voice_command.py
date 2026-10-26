@@ -178,41 +178,6 @@ def test_process_voice_command_ai_service_unavailable(
     assert response.json()["error"]["code"] == "AI_SERVICE_UNAVAILABLE"
 
 
-def test_process_voice_command_concurrent_active_conflict_returns_409(
-    client: TestClient,
-    session: Session,
-    test_project: ProjectModel,
-    owner_user: AuthUser,
-) -> None:
-    app.dependency_overrides[get_current_user] = lambda: owner_user
-
-    # Simular una actividad ya en progreso
-    from app.modules.assistant.domain.entities.agent_activity import AgentActivity
-    from app.modules.assistant.domain.enums.agent_activity_state import AgentActivityState
-    from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_activity_repository import (
-        SQLModelAgentActivityRepository,
-    )
-    import uuid
-
-    repo = SQLModelAgentActivityRepository(session)
-    active_act = AgentActivity(
-        id=uuid.uuid4(),
-        project_id=test_project.id,
-        state=AgentActivityState.IN_PROGRESS,
-    )
-    repo.save(active_act)
-    session.commit()
-
-    audio_file = io.BytesIO(b"audio bytes")
-    response = client.post(
-        "/api/assistant/voice",
-        data={"project_id": str(test_project.id)},
-        files={"audio": ("audio.wav", audio_file, "audio/wav")},
-    )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "ACTIVE_ACTIVITY_CONFLICT"
-
 
 def test_process_voice_command_broadcast_sequencing(
     client: TestClient,

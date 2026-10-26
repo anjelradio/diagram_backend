@@ -29,7 +29,6 @@ from app.modules.assistant.domain.exceptions import (
 )
 from app.modules.assistant.infrastructure.api.schemas.assistant_schemas import (
     ActionResultRead,
-    AgentActivityListItemRead,
     ImageCommandResultRead,
     VoiceCommandResultRead,
 )
@@ -38,9 +37,6 @@ from app.modules.assistant.infrastructure.external.cloudinary_image_provider imp
 )
 from app.modules.assistant.infrastructure.external.gemini_ai_provider import (
     GeminiAiProvider,
-)
-from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_activity_repository import (
-    SQLModelAgentActivityRepository,
 )
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
@@ -98,7 +94,6 @@ async def process_voice_command(
     class_repo = SQLModelDiagramClassRepository(uow.session)
     attr_repo = SQLModelDiagramAttributeRepository(uow.session)
     rel_repo = SQLModelDiagramRelationRepository(uow.session)
-    activity_repo = SQLModelAgentActivityRepository(uow.session)
     snapshot_reader = SQLModelDiagramSnapshotReader(uow.session)
 
     planner = ActionPlanner()
@@ -114,7 +109,6 @@ async def process_voice_command(
     use_case = ProcessVoiceCommandUseCase(
         access_policy=access_policy,
         ai_provider=ai_provider,
-        agent_activity_repository=activity_repo,
         diagram_snapshot_reader=snapshot_reader,
         action_planner=planner,
         action_executor=executor,
@@ -213,7 +207,6 @@ async def process_image_command(
     class_repo = SQLModelDiagramClassRepository(uow.session)
     attr_repo = SQLModelDiagramAttributeRepository(uow.session)
     rel_repo = SQLModelDiagramRelationRepository(uow.session)
-    activity_repo = SQLModelAgentActivityRepository(uow.session)
     snapshot_reader = SQLModelDiagramSnapshotReader(uow.session)
 
     planner = ActionPlanner()
@@ -230,7 +223,6 @@ async def process_image_command(
     use_case = ProcessImageCommandUseCase(
         access_policy=access_policy,
         ai_provider=ai_provider,
-        agent_activity_repository=activity_repo,
         diagram_snapshot_reader=snapshot_reader,
         action_planner=planner,
         action_executor=executor,
@@ -303,49 +295,3 @@ async def process_image_command(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=format_error(exc.code, exc.message),
         )
-
-
-@router.get(
-    "/projects/{project_id}/activities",
-    response_model=list[AgentActivityListItemRead],
-    status_code=status.HTTP_200_OK,
-    summary="Listar historial de actividades del asistente para un proyecto",
-)
-def list_project_activities(
-    project_id: UUID,
-    current_user: CurrentUser = None,
-    uow: UoWDep = None,
-) -> list[AgentActivityListItemRead] | Response:
-    project_repo = SQLModelProjectRepository(uow.session)
-    member_repo = SQLModelProjectMemberRepository(uow.session)
-    access_policy = DiagramAccessPolicy(
-        project_repository=project_repo,
-        project_member_repository=member_repo,
-    )
-
-    try:
-        access_policy.ensure_read_access(
-            project_id=project_id,
-            user_id=current_user.user_id,
-        )
-    except ProjectNotFoundException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content=format_error(exc.code, exc.message),
-        )
-
-    activity_repo = SQLModelAgentActivityRepository(uow.session)
-    activities = activity_repo.find_all_by_project_id(project_id)
-
-    return [
-        AgentActivityListItemRead(
-            id=a.id,
-            project_id=a.project_id,
-            transcription=a.transcription,
-            resume=a.resume,
-            image_url=a.image_url,
-            state=a.state.value if hasattr(a.state, "value") else str(a.state),
-            created_date=a.created_date,
-        )
-        for a in activities
-    ]

@@ -1,8 +1,8 @@
 """Caso de uso para exportar un proyecto a formato XMI 2.1 compatible con Enterprise Architect."""
 
-from dataclasses import dataclass
 import re
 import unicodedata
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.collaboration.application.services.project_access_policy import (

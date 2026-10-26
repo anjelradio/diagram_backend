@@ -1,6 +1,6 @@
 """Servicio de importación y parseo tolerante de archivos XMI 2.1 / XMI 1.1 de Enterprise Architect."""
 
-import math
+import math  # noqa: I001
 import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict

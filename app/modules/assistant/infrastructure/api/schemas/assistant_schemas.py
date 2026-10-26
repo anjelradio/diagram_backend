@@ -3,27 +3,6 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-class AgentActivityListItemRead(BaseModel):
-    """Resumen de actividad para el historial del asistente."""
-
-    id: UUID = Field(description="Identificador único de la actividad")
-    project_id: UUID = Field(description="Identificador del proyecto")
-    transcription: str | None = Field(
-        default=None, description="Transcripción del audio escuchado por la IA"
-    )
-    resume: str | None = Field(
-        default=None, description="Resumen o explicación redactada por el asistente"
-    )
-    image_url: str | None = Field(
-        default=None, description="URL de la imagen asociada, si aplica"
-    )
-    state: str = Field(
-        description="Estado de la actividad (IN_PROGRESS, FINISHED, FAILED, CANCELLED)"
-    )
-    created_date: datetime = Field(
-        description="Fecha y hora UTC de creación de la actividad"
-    )
-
 
 class ActionResultRead(BaseModel):
     """Representación del resultado individual de una acción ejecutada por el asistente."""

@@ -1,6 +1,7 @@
 """DTOs internos de intercambio para la serialización y deserialización XMI de Enterprise Architect."""
 
 from dataclasses import dataclass, field
+
 from app.modules.diagram.domain.enums.diagram_attribute_data_type import (
     DiagramAttributeDataType,
 )

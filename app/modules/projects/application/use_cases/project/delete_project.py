@@ -5,7 +5,9 @@ from app.modules.projects.domain.exceptions import (
     ProjectNotFoundException,
     ProjectNotOwnedException,
 )
-from app.modules.projects.domain.repositories.project_repository import ProjectRepository
+from app.modules.projects.domain.repositories.project_repository import (
+    ProjectRepository,
+)
 from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
 
 

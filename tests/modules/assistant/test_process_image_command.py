@@ -9,17 +9,9 @@ from app.modules.assistant.application.ports.providers.ai_provider import (
     AiAction,
     AiInterpretationResult,
 )
-from app.modules.assistant.domain.entities.agent_activity import AgentActivity
 from app.modules.assistant.domain.enums.agent_action_type import AgentActionType
-from app.modules.assistant.domain.enums.agent_activity_state import AgentActivityState
 from app.modules.assistant.domain.exceptions import (
     AiServiceUnavailableException,
-)
-from app.modules.assistant.infrastructure.persistence.models.agent_activity_model import (
-    AgentActivityModel,
-)
-from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_activity_repository import (
-    SQLModelAgentActivityRepository,
 )
 from app.modules.diagram.infrastructure.persistence.models.diagram_attribute_model import (
     DiagramAttributeModel,
@@ -134,31 +126,6 @@ def test_process_image_command_unauthorized_reader(
 
     assert response.status_code == 403
 
-
-def test_process_image_command_concurrency_conflict(
-    client: TestClient,
-    session: Session,
-    test_project: ProjectModel,
-    owner_user: AuthUser,
-) -> None:
-    app.dependency_overrides[get_current_user] = lambda: owner_user
-
-    # Crear una actividad activa preexistente
-    active_activity = AgentActivity.create(project_id=test_project.id)
-    repo = SQLModelAgentActivityRepository(session)
-    repo.save(active_activity)
-    session.commit()
-
-    img_file = io.BytesIO(b"fake image bytes")
-    response = client.post(
-        "/api/assistant/image",
-        data={"project_id": str(test_project.id)},
-        files={"image": ("diagram.png", img_file, "image/png")},
-    )
-
-    assert response.status_code == 409
-    data = response.json()
-    assert data["error"]["code"] == "ACTIVE_ACTIVITY_CONFLICT"
 
 
 def test_process_image_command_ai_unavailable(

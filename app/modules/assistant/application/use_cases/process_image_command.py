@@ -1,8 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from uuid import UUID
-from sqlalchemy.exc import IntegrityError
+from uuid import UUID, uuid4
 
 from app.modules.assistant.application.ports.providers.ai_provider import (
     AiProvider,
@@ -17,16 +16,11 @@ from app.modules.assistant.application.services.action_executor import (
 from app.modules.assistant.application.services.action_planner import (
     ActionPlanner,
 )
-from app.modules.assistant.domain.entities.agent_activity import AgentActivity
-from app.modules.assistant.domain.enums.agent_activity_state import AgentActivityState
 from app.modules.assistant.domain.exceptions import (
     AgentActionValidationException,
     AgentAlreadyActiveException,
     AgentInterpretationFailedException,
     InvalidImageFormatException,
-)
-from app.modules.assistant.domain.repositories.agent_activity_repository import (
-    AgentActivityRepository,
 )
 from app.modules.diagram.application.ports.readers.diagram_snapshot_reader import (
     DiagramSnapshotDto,
@@ -87,7 +81,6 @@ class ProcessImageCommandUseCase:
         self,
         access_policy: DiagramAccessPolicy,
         ai_provider: AiProvider,
-        agent_activity_repository: AgentActivityRepository,
         diagram_snapshot_reader: DiagramSnapshotReader,
         action_planner: ActionPlanner,
         action_executor: ActionExecutor,
@@ -98,7 +91,6 @@ class ProcessImageCommandUseCase:
     ) -> None:
         self.access_policy = access_policy
         self.ai_provider = ai_provider
-        self.agent_activity_repository = agent_activity_repository
         self.diagram_snapshot_reader = diagram_snapshot_reader
         self.action_planner = action_planner
         self.action_executor = action_executor
@@ -126,10 +118,6 @@ class ProcessImageCommandUseCase:
             command.project_id, command.user_id, ignore_agent_lock=True
         )
 
-        # 3. Reservar la única actividad activa del proyecto.
-        if self.agent_activity_repository.find_active_by_project_id(command.project_id):
-            raise AgentAlreadyActiveException()
-
         # Opcional: Subir imagen al storage externo
         image_url: str | None = None
         if self.image_storage_provider:
@@ -143,18 +131,7 @@ class ProcessImageCommandUseCase:
             except Exception as exc:
                 logger.warning("No se pudo almacenar la imagen en storage externo: %s", exc)
 
-        activity = AgentActivity.create(
-            project_id=command.project_id,
-            image_url=image_url,
-        )
-        self.agent_activity_repository.save(activity)
-        try:
-            # La restricción parcial de la BD cubre la carrera entre dos solicitudes.
-            self.real_uow.session.commit()
-        except IntegrityError as exc:
-            self.real_uow.session.rollback()
-            raise AgentAlreadyActiveException() from exc
-
+        activity_id = uuid4()
         terminal_sent = False
 
         async def publish_terminal(state: str) -> None:
@@ -163,23 +140,17 @@ class ProcessImageCommandUseCase:
             if terminal_sent:
                 return
             await self.connection_manager.broadcast_agent_finished(
-                command.project_id, command.user_id, activity.id, state
+                command.project_id, command.user_id, activity_id, state
             )
             terminal_sent = True
 
-        # 4. Notificar bloqueo a colaboradores por WebSocket
-        try:
-            await self.connection_manager.broadcast_agent_lock(
-                command.project_id, command.user_id, activity.id
-            )
-        except Exception as exc:
-            activity.fail(resume=str(exc))
-            self.agent_activity_repository.save(activity)
-            self.real_uow.session.commit()
-            raise
+        # 3. Notificar bloqueo a colaboradores por WebSocket
+        await self.connection_manager.broadcast_agent_lock(
+            command.project_id, command.user_id, activity_id
+        )
 
         try:
-            # 5. Obtener snapshot completo del diagrama
+            # 4. Obtener snapshot completo del diagrama
             classes = (
                 self.diagram_snapshot_reader.get_classes_with_attributes_by_project_id(
                     command.project_id
@@ -253,17 +224,9 @@ class ProcessImageCommandUseCase:
 
             # 7. Si no hay acciones generadas por la IA
             if not ai_result.actions:
-                activity.finish(
-                    transcription=ai_result.transcription,
-                    resume=ai_result.resume,
-                )
-                self.agent_activity_repository.save(activity)
-                self.real_uow.session.commit()
-
                 await publish_terminal("FINISHED")
-
                 return ProcessImageCommandResultDto(
-                    activity_id=activity.id,
+                    activity_id=activity_id,
                     state="FINISHED",
                     transcription=ai_result.transcription,
                     resume=ai_result.resume,
@@ -299,12 +262,7 @@ class ProcessImageCommandUseCase:
                     }
                 )
 
-            # 10. Actualizar actividad del asistente y confirmar transacción
-            activity.finish(
-                transcription=ai_result.transcription,
-                resume=ai_result.resume,
-            )
-            self.agent_activity_repository.save(activity)
+            # 10. Confirmar transacción de cambios en el diagrama
             self.real_uow.session.commit()
 
             # 11. Emitir mutaciones una por una por WebSocket
@@ -325,7 +283,7 @@ class ProcessImageCommandUseCase:
             await publish_terminal("FINISHED")
 
             return ProcessImageCommandResultDto(
-                activity_id=activity.id,
+                activity_id=activity_id,
                 state="FINISHED",
                 transcription=ai_result.transcription,
                 resume=ai_result.resume,
@@ -347,21 +305,5 @@ class ProcessImageCommandUseCase:
             else:
                 logger.error("Error durante el procesamiento del comando de imagen: %s", exc)
             self.batch_uow.rollback()
-
-            transcription = (
-                ai_result.transcription if "ai_result" in locals() else None
-            )
-            if activity.state != AgentActivityState.FINISHED:
-                activity.fail(
-                    transcription=transcription,
-                    resume=str(exc),
-                )
-                self.agent_activity_repository.save(activity)
-                try:
-                    self.real_uow.session.commit()
-                except Exception:
-                    self.real_uow.session.rollback()
-                await publish_terminal("FAILED")
-            else:
-                await publish_terminal("FINISHED")
+            await publish_terminal("FAILED")
             raise exc

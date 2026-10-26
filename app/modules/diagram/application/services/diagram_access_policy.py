@@ -46,17 +46,6 @@ class DiagramAccessPolicy:
             project_repository=project_repository,
             project_member_repository=project_member_repository,
         )
-        if active_activity_reader is None:
-            # Las implementaciones SQLModel exponen la sesión mediante ``db``.
-            # La importación perezosa mantiene el puerto opcional para pruebas y
-            # evita que el dominio de diagramas dependa del adaptador de IA al cargar.
-            db = getattr(project_member_repository, "db", None)
-            if db is not None:
-                from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_activity_repository import (
-                    SQLModelAgentActivityRepository,
-                )
-
-                active_activity_reader = SQLModelAgentActivityRepository(db)
         self.active_activity_reader = active_activity_reader
         self.bypass_agent_lock = bypass_agent_lock
 

@@ -107,7 +107,7 @@ def test_delete_diagram_relation_and_cascades(
     # Verificar que la relación no está en el snapshot
     assert not any(r["id"] == rel_1n_id for r in resp_snapshot.json()["relations"])
 
-    # 2. Probar Generalización y reversión de SHARED_PRIMARY_KEY
+    # 2. Probar Generalización y eliminación de FK secundaria derivada
     app.dependency_overrides[get_current_user] = lambda: owner_user
     c_parent = create_test_class(session, project_id, name="Person")
     create_test_attribute(session, c_parent.id, name="id", position=0, is_primary_key=True)
@@ -116,6 +116,7 @@ def test_delete_diagram_relation_and_cascades(
     session.commit()
 
     rel_gen_id = str(uuid.uuid4())
+    gen_fk_id = str(uuid.uuid4())
     payload_gen = {
         "id": rel_gen_id,
         "name": "",
@@ -131,14 +132,22 @@ def test_delete_diagram_relation_and_cascades(
             "cardinality": None,
         },
         "materialization": {
-            "strategy": "SHARED_PRIMARY_KEY",
-            "foreign_attributes": [],
-            "shared_primary_key": {
-                "attribute_id": str(student_pk.id),
-                "class_id": str(c_child.id),
-                "referenced_class_id": str(c_parent.id),
-                "relation_id": rel_gen_id,
-            },
+            "strategy": "FOREIGN_KEY",
+            "foreign_attributes": [
+                {
+                    "id": gen_fk_id,
+                    "class_id": str(c_child.id),
+                    "name": "person_id",
+                    "data_type": "UUID",
+                    "position": 1,
+                    "is_primary_key": False,
+                    "is_nullable": False,
+                    "is_foreign_key": True,
+                    "referenced_class_id": str(c_parent.id),
+                    "relation_id": rel_gen_id,
+                }
+            ],
+            "shared_primary_key": None,
             "bridge_class": None,
         },
     }
@@ -150,9 +159,10 @@ def test_delete_diagram_relation_and_cascades(
     resp_del_gen = client.delete(f"/api/diagram/relations/{rel_gen_id}")
     assert resp_del_gen.status_code == 204
 
-    # Verificar que el atributo PK de student se revirtió (is_foreign_key=False, referenced_class_id=None, relation_id=None)
+    # Verificar que el atributo FK de generalización se eliminó y la PK de student permanece intacta
     resp_snap_gen = client.get(f"/api/projects/{project_id}/diagram")
     student_class = next(c for c in resp_snap_gen.json()["classes"] if c["id"] == str(c_child.id))
+    assert not any(a["id"] == gen_fk_id for a in student_class["attributes"])
     st_pk_attr = next(a for a in student_class["attributes"] if a["id"] == str(student_pk.id))
     assert st_pk_attr["is_primary_key"] is True
     assert st_pk_attr["is_foreign_key"] is False

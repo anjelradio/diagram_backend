@@ -136,7 +136,7 @@ def test_aggregation_and_composition_materialization():
     assert not comp_plan.foreign_key.is_nullable
 
 
-def test_generalization_shared_primary_key():
+def test_generalization_foreign_key():
     source_id = uuid.uuid4()
     target_id = uuid.uuid4()
 
@@ -145,9 +145,10 @@ def test_generalization_shared_primary_key():
         source_class_id=source_id,
         target_class_id=target_id,
     )
-    assert gen_plan.strategy == MaterializationStrategy.SHARED_PRIMARY_KEY
-    assert gen_plan.shared_primary_key.subclass_id == source_id
-    assert gen_plan.shared_primary_key.superclass_id == target_id
+    assert gen_plan.strategy == MaterializationStrategy.FOREIGN_KEY
+    assert gen_plan.foreign_key.receiving_class_id == source_id
+    assert gen_plan.foreign_key.referenced_class_id == target_id
+    assert not gen_plan.foreign_key.is_nullable
 
 
 def test_realization_and_dependency_materialization():
@@ -328,21 +329,29 @@ def test_parity_matrix_for_all_relation_types():
     }
     validate_relation_materialization(relation_id, comp_plan, comp_payload)
 
-    # 3. Generalización: Subclase (source) -> Superclase (target); SHARED_PRIMARY_KEY en subclass
+    # 3. Generalización: Subclase (source) -> Superclase (target); FK en subclase, is_nullable=False
     gen_plan = determine_materialization_plan(
         relation_type=DiagramRelationType.GENERALIZATION,
         source_class_id=source_id,
         target_class_id=target_id,
     )
     gen_payload = {
-        "strategy": "SHARED_PRIMARY_KEY",
-        "foreign_attributes": [],
-        "shared_primary_key": {
-            "attribute_id": str(uuid.uuid4()),
-            "class_id": str(source_id),
-            "referenced_class_id": str(target_id),
-            "relation_id": str(relation_id),
-        },
+        "strategy": "FOREIGN_KEY",
+        "foreign_attributes": [
+            {
+                "id": str(uuid.uuid4()),
+                "class_id": str(source_id),
+                "name": "superclase_id",
+                "data_type": "UUID",
+                "position": 1,
+                "is_primary_key": False,
+                "is_nullable": False,
+                "is_foreign_key": True,
+                "referenced_class_id": str(target_id),
+                "relation_id": str(relation_id),
+            }
+        ],
+        "shared_primary_key": None,
         "bridge_class": None,
     }
     validate_relation_materialization(relation_id, gen_plan, gen_payload)

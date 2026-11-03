@@ -279,7 +279,7 @@ def test_derived_foreign_key_and_shared_primary_key_permissions(
     resp_del_fk = client.delete(f"/api/diagram/attributes/{fk_id}")
     assert resp_del_fk.status_code == 409
 
-    # 2. Generalización: Subclase comparte PK con Superclase
+    # 2. Generalización: Subclase recibe FK separada hacia Superclase
     c3 = create_test_class(session, project_id, name="Vehicle")
     create_test_attribute(session, c3.id, name="id", position=0, is_primary_key=True)
     c4 = create_test_class(session, project_id, name="Car")
@@ -287,6 +287,7 @@ def test_derived_foreign_key_and_shared_primary_key_permissions(
     session.commit()
 
     gen_rel_id = str(uuid.uuid4())
+    gen_fk_id = str(uuid.uuid4())
     resp_gen = client.post(
         f"/api/projects/{project_id}/diagram/relations",
         json={
@@ -304,56 +305,69 @@ def test_derived_foreign_key_and_shared_primary_key_permissions(
                 "cardinality": None,
             },
             "materialization": {
-                "strategy": "SHARED_PRIMARY_KEY",
-                "foreign_attributes": [],
-                "shared_primary_key": {
-                    "attribute_id": str(c4_pk.id),
-                    "class_id": str(c4.id),
-                    "referenced_class_id": str(c3.id),
-                    "relation_id": gen_rel_id,
-                },
+                "strategy": "FOREIGN_KEY",
+                "foreign_attributes": [
+                    {
+                        "id": gen_fk_id,
+                        "class_id": str(c4.id),
+                        "name": "vehicle_id",
+                        "data_type": "UUID",
+                        "position": 1,
+                        "is_primary_key": False,
+                        "is_nullable": False,
+                        "is_foreign_key": True,
+                        "referenced_class_id": str(c3.id),
+                        "relation_id": gen_rel_id,
+                    }
+                ],
+                "shared_primary_key": None,
                 "bridge_class": None,
             },
         },
     )
     assert resp_gen.status_code == 201
 
-    # Verificar que en el snapshot la PK de la subclase ahora tiene is_primary_key=True e is_foreign_key=True
+    # Verificar que en el snapshot la PK de la subclase permanece como PK pura (is_foreign_key=False)
+    # y la nueva FK de generalización tiene is_foreign_key=True, is_primary_key=False
     resp_snap = client.get(f"/api/projects/{project_id}/diagram")
     assert resp_snap.status_code == 200
     c4_data = next(c for c in resp_snap.json()["classes"] if c["id"] == str(c4.id))
     c4_pk_data = next(a for a in c4_data["attributes"] if a["id"] == str(c4_pk.id))
     assert c4_pk_data["is_primary_key"] is True
-    assert c4_pk_data["is_foreign_key"] is True
+    assert c4_pk_data["is_foreign_key"] is False
 
-    # PK compartida: Renombrar BLOQUEADO -> 409 Conflict
-    resp_rename_shared_pk = client.patch(
+    gen_fk_data = next(a for a in c4_data["attributes"] if a["id"] == gen_fk_id)
+    assert gen_fk_data["is_primary_key"] is False
+    assert gen_fk_data["is_foreign_key"] is True
+
+    # PK: Renombrar BLOQUEADO -> 409 Conflict
+    resp_rename_pk = client.patch(
         f"/api/diagram/attributes/{c4_pk.id}",
         json={"name": "vehicle_ref"},
     )
-    assert resp_rename_shared_pk.status_code == 409
+    assert resp_rename_pk.status_code == 409
 
-    # PK compartida: Cambiar tipo bloqueado -> 409 Conflict
-    resp_type_shared_pk = client.patch(
+    # PK: Cambiar tipo bloqueado -> 409 Conflict
+    resp_type_pk = client.patch(
         f"/api/diagram/attributes/{c4_pk.id}",
         json={"data_type": "TEXT"},
     )
-    assert resp_type_shared_pk.status_code == 409
+    assert resp_type_pk.status_code == 409
 
-    # PK compartida: Cambiar nulabilidad bloqueado -> 409 Conflict
-    resp_null_shared_pk = client.patch(
+    # PK: Cambiar nulabilidad bloqueado -> 409 Conflict
+    resp_null_pk = client.patch(
         f"/api/diagram/attributes/{c4_pk.id}",
         json={"is_nullable": True},
     )
-    assert resp_null_shared_pk.status_code == 409
+    assert resp_null_pk.status_code == 409
 
-    # PK compartida: Reposicionar bloqueado -> 409 Conflict
-    resp_repo_shared_pk = client.patch(
+    # PK: Reposicionar bloqueado -> 409 Conflict
+    resp_repo_pk = client.patch(
         f"/api/diagram/attributes/{c4_pk.id}/position",
         json={"position": 1},
     )
-    assert resp_repo_shared_pk.status_code == 409
+    assert resp_repo_pk.status_code == 409
 
-    # PK compartida: Eliminar bloqueado -> 409 Conflict
-    resp_del_shared_pk = client.delete(f"/api/diagram/attributes/{c4_pk.id}")
-    assert resp_del_shared_pk.status_code == 409
+    # PK: Eliminar bloqueado -> 409 Conflict
+    resp_del_pk = client.delete(f"/api/diagram/attributes/{c4_pk.id}")
+    assert resp_del_pk.status_code == 409

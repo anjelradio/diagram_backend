@@ -220,6 +220,7 @@ def test_rename_diagram_relation(
     session.commit()
 
     gen_rel_id = str(uuid.uuid4())
+    gen_fk_id = str(uuid.uuid4())
     gen_payload = {
         "id": gen_rel_id,
         "name": "",
@@ -235,14 +236,22 @@ def test_rename_diagram_relation(
             "cardinality": None,
         },
         "materialization": {
-            "strategy": "SHARED_PRIMARY_KEY",
-            "foreign_attributes": [],
-            "shared_primary_key": {
-                "attribute_id": str(c4_pk.id),
-                "class_id": str(c4.id),
-                "referenced_class_id": str(c3.id),
-                "relation_id": gen_rel_id,
-            },
+            "strategy": "FOREIGN_KEY",
+            "foreign_attributes": [
+                {
+                    "id": gen_fk_id,
+                    "class_id": str(c4.id),
+                    "name": "parent_id",
+                    "data_type": "UUID",
+                    "position": 1,
+                    "is_primary_key": False,
+                    "is_nullable": False,
+                    "is_foreign_key": True,
+                    "referenced_class_id": str(c3.id),
+                    "relation_id": gen_rel_id,
+                }
+            ],
+            "shared_primary_key": None,
             "bridge_class": None,
         },
     }

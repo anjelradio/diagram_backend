@@ -129,9 +129,18 @@ def test_import_project_with_non_associative_relations_ignores_names(client):
         assert rel["source_cardinality"] is None
         assert rel["target_cardinality"] is None
 
-    # Verificar materialización de SHARED_PRIMARY_KEY en la subclase Empleado
+    # Verificar materialización de FOREIGN_KEY en la subclase Empleado
     emp_class = next(c for c in diag["classes"] if c["name"] == "Empleado")
     emp_pk = next(a for a in emp_class["attributes"] if a["is_primary_key"])
     person_class = next(c for c in diag["classes"] if c["name"] == "Persona")
-    assert emp_pk["referenced_class_id"] == person_class["id"]
+    assert emp_pk["is_foreign_key"] is False
+    assert emp_pk["referenced_class_id"] is None
+
+    emp_fk = next(
+        a
+        for a in emp_class["attributes"]
+        if a["is_foreign_key"] and a["referenced_class_id"] == person_class["id"]
+    )
+    assert emp_fk is not None
+    assert emp_fk["is_primary_key"] is False
 

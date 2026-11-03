@@ -66,23 +66,20 @@ class DeleteDiagramRelationUseCase:
                 )
                 for attr in bridge_attrs:
                     self.diagram_attribute_repository.delete(attr.id)
-        elif relation.relation_type == DiagramRelationType.GENERALIZATION:
-            # Caso SHARED_PRIMARY_KEY: revertir la PK de la subclase a PK regular
-            related_attrs = self.diagram_attribute_repository.list_by_relation_id(
+        else:
+            # Caso FOREIGN_KEY (1:N, 1:1, Aggregation, Composition, Generalization, Realization, Dependency):
+            # Eliminar atributos FK derivados y compactar posiciones en las clases receptoras
+            fk_attrs = self.diagram_attribute_repository.list_by_relation_id(
                 relation.id
             )
-            for attr in related_attrs:
+            affected_class_ids: set[UUID] = set()
+            for attr in fk_attrs:
                 if attr.is_primary_key:
                     attr.revert_shared_primary_key()
                     self.diagram_attribute_repository.save(attr)
                 else:
                     self.diagram_attribute_repository.delete(attr.id)
-        else:
-            # Caso FOREIGN_KEY (1:N, 1:1, Aggregation, Composition, Realization, Dependency):
-            # Eliminar atributos FK derivados y compactar posiciones en las clases receptoras
-            fk_attrs = self.diagram_attribute_repository.list_by_relation_id(
-                relation.id
-            )
+                    affected_class_ids.add(attr.class_id)
             affected_class_ids: set[UUID] = set()
             for attr in fk_attrs:
                 self.diagram_attribute_repository.delete(attr.id)

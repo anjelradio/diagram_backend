@@ -60,11 +60,13 @@ def determine_materialization_plan(
 ) -> MaterializationPlan:
     """Calcula la estrategia determinista de materialización y los roles de extremos."""
     if relation_type == DiagramRelationType.GENERALIZATION:
+        # Origen = Subclase, Destino = Superclase; FK en subclase hacia superclase, no nullable
         return MaterializationPlan(
-            strategy=MaterializationStrategy.SHARED_PRIMARY_KEY,
-            shared_primary_key=SharedPrimaryKeyRule(
-                subclass_id=source_class_id,
-                superclass_id=target_class_id,
+            strategy=MaterializationStrategy.FOREIGN_KEY,
+            foreign_key=ForeignKeyRule(
+                receiving_class_id=source_class_id,
+                referenced_class_id=target_class_id,
+                is_nullable=False,
             ),
         )
 

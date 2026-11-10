@@ -223,3 +223,94 @@ def test_bug3_batch_attribute_directives():
     from app.modules.assistant.application.services.prompting.legacy_prompts import TOOL_PROMPT
     assert "DEBES enviar todas las acciones `CREATE_ATTRIBUTE` juntas" in TOOL_PROMPT
     assert "NUNCA crees atributos uno por uno" in TOOL_PROMPT
+
+
+def test_structural_relation_with_name_is_normalized_In_schema_and_tools():
+    """Verifica que una relación estructural (ej. COMPOSITION) con 'name' no falle por InvalidDiagramRelationNameException."""
+    from app.modules.assistant.application.services.diagram.diagram_tool_schemas import (
+        validate_actions,
+    )
+
+    src_id = str(uuid4())
+    tgt_id = str(uuid4())
+    normalized = validate_actions(
+        {
+            "actions": [
+                {
+                    "operation_id": "op_comp",
+                    "kind": "CREATE_RELATION",
+                    "relation_type": "COMPOSITION",
+                    "source_class_id": src_id,
+                    "target_class_id": tgt_id,
+                    "name": "contiene",
+                }
+            ]
+        }
+    )
+    assert len(normalized) == 1
+    assert normalized[0]["relation_type"] == "COMPOSITION"
+    assert "name" not in normalized[0]
+
+
+def test_extract_inline_mutation_tool_call_from_markdown_json_block():
+    """Verifica que si el modelo emite un bloque ```json {"actions": [...]} ``` sin tool_calls nativo, se extraiga la llamada."""
+    from app.modules.assistant.application.services.execution.plan_executor import (
+        _extract_inline_mutation_tool_call,
+    )
+
+    raw_text = (
+        "Voy a crear la clase **Cliente** con sus atributos: nombre, email y teléfono.\n\n"
+        "```json\n"
+        "{\n"
+        '  "actions": [\n'
+        "    {\n"
+        '      "operation_id": "create_cliente_class",\n'
+        '      "kind": "CREATE_CLASS",\n'
+        '      "name": "Cliente",\n'
+        '      "attributes": [\n'
+        '        {"name": "nombre", "data_type": "TEXT"}\n'
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "```"
+    )
+    call = _extract_inline_mutation_tool_call(raw_text)
+    assert call is not None
+    assert call.name == "apply_diagram_changes"
+    assert call.arguments["actions"][0]["kind"] == "CREATE_CLASS"
+    assert call.arguments["actions"][0]["name"] == "Cliente"
+
+
+def test_format_plan_execution_response_includes_created_classes_in_partial_summary():
+    """Verifica que las clases creadas aparezcan siempre en 'Cambios aplicados' ante un resultado parcial."""
+    from app.modules.assistant.domain.entities.execution_plan import ExecutionPlan
+    from app.modules.assistant.application.services.execution.agent_response import (
+        format_plan_execution_response,
+    )
+
+    plan = ExecutionPlan.create(
+        goal="Crear sistema de ventas",
+        tasks=[
+            {"id": "create-producto", "objective": "Crear la clase Producto con sus atributos", "status": "completed"},
+            {"id": "create-cliente", "objective": "Crear la clase Cliente con sus atributos", "status": "failed", "error_code": "missing_expected_operations"},
+        ],
+    )
+    plan.operation_ledger = [
+        {
+            "operation_id": "op-prod",
+            "task_id": "create-producto",
+            "action_kind": "CREATE_CLASS",
+            "target_name": "Producto",
+            "status": "applied",
+            "entity_refs": [
+                {"type": "class", "id": str(uuid4()), "name": "Producto"},
+                {"type": "attribute", "id": str(uuid4())},
+            ],
+        }
+    ]
+    plan.recompute_overall_status()
+    response = format_plan_execution_response(plan)
+    assert "**Cambios aplicados:**" in response
+    assert "Se creó clase **Producto** (creada)." in response
+

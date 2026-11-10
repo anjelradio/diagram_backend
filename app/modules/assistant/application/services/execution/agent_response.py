@@ -234,11 +234,18 @@ def extract_communicable_facts(
         for ref in refs:
             ent_type = ref.get("type", "entity")
             ref_id = str(ref.get("id") or "")
-            # Omitir atributos que son efectos secundarios de relaciones (FK generadas automáticamente)
-            if ent_type in {"attribute", "atributo"} and (kind == "CREATE_RELATION" or ref_id in derived_attr_ids):
+            # Omitir atributos que son efectos secundarios de relaciones o creación interna de clase sin nombre explícito
+            if ent_type in {"attribute", "atributo"} and (
+                kind == "CREATE_RELATION"
+                or ref_id in derived_attr_ids
+                or (kind == "CREATE_CLASS" and not ref.get("name"))
+            ):
                 continue
 
-            ent_name = _extract_clean_name(ref, task)
+            raw_ref = dict(ref)
+            if not raw_ref.get("name") and entry.get("target_name") and ent_type in {"class", "clase"}:
+                raw_ref["name"] = entry.get("target_name")
+            ent_name = _extract_clean_name(raw_ref, task)
 
             action = "created"
             if "UPDATE" in kind or "RENAME" in kind:
@@ -462,11 +469,14 @@ def format_plan_execution_response(plan: Any) -> str:
     # Extraer cambios confirmados (solo applied en el ledger)
     confirmed_facts: list[CommunicableFact] = []
     seen_confirmed: set[tuple[str, str, str]] = set()
+    tasks_by_id = {t.get("id"): t for t in tasks if isinstance(t, dict) and t.get("id")}
 
     for entry in ledger:
         if entry.get("status") != "applied":
             continue
         kind = str(entry.get("action_kind") or "")
+        task_id = entry.get("task_id")
+        task = tasks_by_id.get(task_id) if task_id else None
         action = "created"
         if "UPDATE" in kind or "RENAME" in kind:
             action = "updated"
@@ -483,10 +493,17 @@ def format_plan_execution_response(plan: Any) -> str:
         for ref in entry.get("entity_refs", []):
             ent_type = ref.get("type", "elemento")
             ref_id = str(ref.get("id") or "")
-            if ent_type in {"attribute", "atributo"} and (kind == "CREATE_RELATION" or ref_id in derived_attr_ids):
+            if ent_type in {"attribute", "atributo"} and (
+                kind == "CREATE_RELATION"
+                or ref_id in derived_attr_ids
+                or (kind == "CREATE_CLASS" and not ref.get("name"))
+            ):
                 continue
-            ent_name = str(ref.get("name") or ref.get("id") or "elemento")
-            if not _UUID_PATTERN.search(ent_name):
+            raw_ref = dict(ref)
+            if not raw_ref.get("name") and entry.get("target_name") and ent_type in {"class", "clase"}:
+                raw_ref["name"] = entry.get("target_name")
+            ent_name = str(raw_ref.get("name") or _extract_clean_name(raw_ref, task))
+            if ent_name != "elemento" and not _UUID_PATTERN.search(ent_name):
                 key = (ent_type, ent_name, action)
                 if key not in seen_confirmed:
                     seen_confirmed.add(key)

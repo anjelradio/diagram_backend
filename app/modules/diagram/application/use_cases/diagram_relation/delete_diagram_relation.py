@@ -4,8 +4,18 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_attribute,
+    serialize_class,
+    serialize_relation,
+)
 from app.modules.diagram.application.use_cases.diagram_relation.realtime_projection import (
     class_snapshot,
+)
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
 )
 from app.modules.diagram.domain.enums.diagram_relation_type import (
     DiagramRelationType,
@@ -63,6 +73,29 @@ class DeleteDiagramRelationUseCase:
 
         self.access_policy.ensure_write_access(relation.project_id, command.user_id)
 
+        source_class = self.diagram_class_repository.find_by_id(relation.source_class_id)
+        target_class = self.diagram_class_repository.find_by_id(relation.target_class_id)
+        source_name = source_class.name if source_class is not None else "Clase desconocida"
+        target_name = target_class.name if target_class is not None else "Clase desconocida"
+
+        bridge_class_snapshot = None
+        if relation.bridge_class_id is not None:
+            bridge_class = self.diagram_class_repository.find_by_id(relation.bridge_class_id)
+            if bridge_class is not None:
+                bridge_attrs = self.diagram_attribute_repository.list_by_class_id(bridge_class.id)
+                bridge_class_snapshot = serialize_class(bridge_class, attributes=bridge_attrs)
+
+        raw_fk_attrs = self.diagram_attribute_repository.list_by_relation_id(relation.id)
+        affected_foreign_attributes = [serialize_attribute(a) for a in raw_fk_attrs]
+
+        payload_before = serialize_relation(
+            relation,
+            source_class_name=source_name,
+            target_class_name=target_name,
+            bridge_class_snapshot=bridge_class_snapshot,
+            affected_foreign_attributes=affected_foreign_attributes,
+        )
+
         # 1. Limpieza de atributos derivados según la estrategia de materialización
         bridge_class_id_to_delete: UUID | None = None
         affected_class_ids: set[UUID] = set()
@@ -106,12 +139,12 @@ class DeleteDiagramRelationUseCase:
 
         # 2. Eliminar la relación primero para que no quede referencia activa hacia la clase puente
         self.diagram_relation_repository.delete(relation.id)
+        self.uow.flush()
 
         # 3. Eliminar la clase puente si existía
         if bridge_class_id_to_delete is not None:
             self.diagram_class_repository.delete(bridge_class_id_to_delete)
-
-        self.uow.flush()
+            self.uow.flush()
         materialized_classes = []
         for class_id in sorted(affected_class_ids, key=str):
             affected_class = self.diagram_class_repository.find_by_id(class_id)
@@ -136,5 +169,22 @@ class DeleteDiagramRelationUseCase:
                 "removed_attribute_ids": removed_attribute_ids,
             },
         ))
+        rel_display = relation.name if relation.name else relation.relation_type.value
+        self.uow.publish_event(
+            create_diagram_audit_event(
+                project_id=relation.project_id,
+                user_id=command.user_id,
+                event_sender_id=command.event_sender_id,
+                entity_type=DiagramAuditEntityType.RELATION,
+                entity_id=relation.id,
+                entity_name=rel_display,
+                action=DiagramAuditAction.DELETE,
+                use_case="DELETE_RELATION",
+                summary=f"Se eliminó la relación '{rel_display}' entre '{source_name}' y '{target_name}'",
+                payload_before=payload_before,
+                payload_after=None,
+            )
+        )
         if commit_transaction:
             self.uow.commit()
+

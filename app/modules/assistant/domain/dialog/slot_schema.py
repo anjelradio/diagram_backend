@@ -101,6 +101,29 @@ def infer_attribute_type(name: str | None) -> str:
     return "TEXT"
 
 
+_OPTIONAL_ATTRIBUTE_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"^(?:descripcion|description|observaciones?|notas?|comentarios?)$", re.IGNORECASE),
+    re.compile(r"^(?:telefono|phone|celular|movil|fax)$", re.IGNORECASE),
+    re.compile(r"^(?:direccion|address|ubicacion|location|segundo_nombre|segundo_apellido)$", re.IGNORECASE),
+    re.compile(r"^(?:descuento|discount|bonificacion)$", re.IGNORECASE),
+    re.compile(r"^(?:imagen|imagen_url|image|image_url|foto|photo|avatar|logo|sitio_web|website|url)$", re.IGNORECASE),
+    re.compile(r"^(?:referencia|reference|detalles?|details?|especificaciones?)$", re.IGNORECASE),
+    re.compile(r"^(?:fecha_baja|deleted_at|motivo|razon|comprobante)$", re.IGNORECASE),
+    re.compile(r".*(?:_opcional|optional).*", re.IGNORECASE),
+)
+
+
+def infer_attribute_nullability(name: str | None) -> bool:
+    """Infiere si un atributo es opcional (nullable=True) u obligatorio (nullable=False) según convenciones semánticas."""
+    if not name or not isinstance(name, str):
+        return False
+    clean = name.strip()
+    for pattern in _OPTIONAL_ATTRIBUTE_PATTERNS:
+        if pattern.match(clean):
+            return True
+    return False
+
+
 class ActionSlotRegistry:
     """Catálogo canónico de requisitos por acción."""
 

@@ -622,3 +622,148 @@ async def test_colloquial_slang_and_idiomatic_expressions():
     assert result.status == "completed"
     assert len(orchestrator.contexts_received) == 1
     assert "Crear una relación de herencia entre Usuario y Administrador." in orchestrator.contexts_received[0].prompt
+    assert orchestrator.contexts_received[0].semantic_routed is True
+
+
+@pytest.mark.anyio
+async def test_action_planner_receives_existing_classes_context():
+    """8. ActionPlanner recibe las clases existentes del diagrama para no duplicar tareas CREATE_CLASS."""
+    from app.modules.assistant.application.services.planning.action_planner import ActionPlanner
+
+    mock_provider = MockAiProvider([
+        {
+            "goal": "Crear Factura y relacionarla con Cliente existente",
+            "tasks": [
+                {
+                    "id": "create-factura",
+                    "objective": "Crear clase Factura con atributo total",
+                    "kind": "mutation",
+                    "depends_on": [],
+                    "expected_actions": [{"kind": "CREATE_CLASS", "name": "Factura"}],
+                },
+                {
+                    "id": "rel-cliente-factura",
+                    "objective": "Relacionar Cliente con Factura (1 a muchos)",
+                    "kind": "mutation",
+                    "depends_on": ["create-factura"],
+                    "expected_actions": ["CREATE_RELATION"],
+                },
+            ],
+        }
+    ])
+    planner = ActionPlanner(mock_provider)
+    plan = await planner.create_plan(
+        "Crea la clase Factura y relaciónala con Cliente",
+        existing_classes={"Cliente": "uuid-1", "Producto": "uuid-2"},
+    )
+
+    assert plan is not None
+    assert len(plan.tasks) == 2
+    sent_messages = mock_provider.recorded_requests[0].messages
+    combined_content = "\n".join(str(m.content) for m in sent_messages)
+    assert "Cliente" in combined_content
+    assert "Producto" in combined_content
+
+
+def test_advisory_and_list_prompts_without_question_marks_classify_as_query():
+    """9. Solicitudes de asesoría, sugerencia o listado sin signos de interrogación se clasifican como consulta."""
+    from app.modules.assistant.application.services.planning.agent_intent import classify_agent_intent
+
+    for prompt in (
+        "sugiere atributos para la clase Cliente",
+        "recomienda relaciones para el sistema de ventas",
+        "lista las clases del diagrama",
+        "muéstrame las clases actuales",
+        "en un sistema POS señala las clases que debería tener",
+    ):
+        intent = classify_agent_intent(prompt)
+        assert intent.action == "query", f"Falló para: {prompt}"
+        assert intent.requires_mutation is False, f"Falló para: {prompt}"
+
+
+def test_infer_attribute_nullability_semantic_heuristics():
+    """10. infer_attribute_nullability distingue atributos nucleares (obligatorios) de secundarios (opcionales)."""
+    from app.modules.assistant.domain.dialog.slot_schema import infer_attribute_nullability
+
+    # Nucleares / obligatorios -> False
+    assert infer_attribute_nullability("precio") is False
+    assert infer_attribute_nullability("nombre") is False
+    assert infer_attribute_nullability("codigo") is False
+    assert infer_attribute_nullability("total") is False
+    assert infer_attribute_nullability("subtotal") is False
+    assert infer_attribute_nullability("cantidad") is False
+    assert infer_attribute_nullability("stock") is False
+    assert infer_attribute_nullability("email") is False
+    assert infer_attribute_nullability("fecha") is False
+    assert infer_attribute_nullability("estado") is False
+
+    # Secundarios / descriptivos -> True
+    assert infer_attribute_nullability("descripcion") is True
+    assert infer_attribute_nullability("observaciones") is True
+    assert infer_attribute_nullability("notas") is True
+    assert infer_attribute_nullability("comentario") is True
+    assert infer_attribute_nullability("telefono") is True
+    assert infer_attribute_nullability("celular") is True
+    assert infer_attribute_nullability("direccion") is True
+    assert infer_attribute_nullability("descuento") is True
+    assert infer_attribute_nullability("imagen_url") is True
+    assert infer_attribute_nullability("foto") is True
+
+
+def test_first_turn_relation_prompt_triggers_semantic_routing():
+    """11. Prompts de relaciones o atributos en el primer turno activan el router semántico."""
+    from app.modules.assistant.application.use_cases.process_agent_message import (
+        _needs_semantic_context_resolution,
+    )
+
+    # En el primer turno (sin historial ni continuación activa), deben evaluarse semánticamente
+    assert _needs_semantic_context_resolution("Relaciona la clase Producto", False, False) is True
+    assert _needs_semantic_context_resolution("Relaciona Producto con Categoría", False, False) is True
+    assert _needs_semantic_context_resolution("Crea el atributo nombre", False, False) is True
+    assert _needs_semantic_context_resolution("Crea los atributos precio y nombre en Producto", False, False) is True
+    assert _needs_semantic_context_resolution("Quiero una composición entre Venta y DetalleVenta", False, False) is True
+
+
+@pytest.mark.anyio
+async def test_semantic_router_incomplete_relation_asks_only_for_missing_class():
+    """12. Cuando falta una clase para relacionar, el router semántico pide solo la clase faltante."""
+    router = SemanticIntentRouter(ai_provider=None)  # usa fallback defensivo
+    decision = await router.route(
+        user_message="Relaciona la clase Producto",
+        recent_turns=[],
+        existing_classes=["Producto", "Categoria", "Cliente"],
+    )
+
+    assert decision.category == SemanticCategory.NEEDS_MORE_CONTEXT
+    assert decision.requires_mutation is False
+    assert "Producto" in (decision.clarification_question or "")
+    assert decision.missing_info == ("target_class",)
+
+
+@pytest.mark.anyio
+async def test_semantic_router_autonomous_relation_reasoning_in_fallback_and_ai():
+    """13. Relación con ambas clases razona autónomamente la mutación sin pedir aclaraciones."""
+    mock_ai = MockAiProvider([
+        {
+            "category": "DIRECT_ACTION",
+            "reasoning": "Se deduce asociación 1 a N entre Categoría y Producto con lectura cruzada.",
+            "resolved_goal": "Crear relación de asociación entre Producto (0..*) y Categoría (1) con nombre pertenece.",
+            "requires_mutation": True,
+            "missing_info": None,
+            "clarification_question": None,
+        }
+    ])
+    router = SemanticIntentRouter(ai_provider=mock_ai)
+    decision = await router.route(
+        user_message="Relaciona Producto con Categoría",
+        recent_turns=[],
+        existing_classes=["Producto", "Categoría"],
+    )
+
+    assert decision.category == SemanticCategory.DIRECT_ACTION
+    assert decision.requires_mutation is True
+    assert "0..*" in decision.resolved_goal
+    assert "1" in decision.resolved_goal
+    assert "pertenece" in decision.resolved_goal
+
+

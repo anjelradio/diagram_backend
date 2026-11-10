@@ -4,9 +4,17 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_class,
+)
 from app.modules.diagram.application.use_cases.diagram_relation.delete_diagram_relation import (
     DeleteDiagramRelationCommand,
     DeleteDiagramRelationUseCase,
+)
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
 )
 from app.modules.diagram.domain.repositories.diagram_attribute_repository import (
     DiagramAttributeRepository,
@@ -63,6 +71,15 @@ class DeleteDiagramClassUseCase:
         self.access_policy.ensure_write_access(existing.project_id, command.user_id)
 
         try:
+            attributes = self.diagram_attribute_repository.list_by_class_id(existing.id)
+            associated_relations = self.diagram_relation_repository.list_by_class_id(existing.id)
+            cascaded_relation_ids = [r.id for r in associated_relations]
+            payload_before = serialize_class(
+                existing,
+                attributes=attributes,
+                cascaded_relation_ids=cascaded_relation_ids,
+            )
+
             self._delete_associated_relations(
                 existing.id, command.user_id, command.event_sender_id
             )
@@ -74,8 +91,24 @@ class DeleteDiagramClassUseCase:
                     data={"class_id": str(existing.id)},
                 )
             )
+            self.uow.publish_event(
+                create_diagram_audit_event(
+                    project_id=existing.project_id,
+                    user_id=command.user_id,
+                    event_sender_id=command.event_sender_id,
+                    entity_type=DiagramAuditEntityType.CLASS,
+                    entity_id=existing.id,
+                    entity_name=existing.name,
+                    action=DiagramAuditAction.DELETE,
+                    use_case="DELETE_CLASS",
+                    summary=f"Se eliminó la clase '{existing.name}'",
+                    payload_before=payload_before,
+                    payload_after=None,
+                )
+            )
             self.uow.commit()
         except Exception:
+
             self.uow.rollback()
             raise
 

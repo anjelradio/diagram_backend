@@ -1,6 +1,15 @@
 from app.modules.diagram.domain.enums.diagram_attribute_data_type import (
     DiagramAttributeDataType,
 )
+from app.modules.diagram.domain.enums.diagram_audit_action import (
+    DiagramAuditAction,
+)
+from app.modules.diagram.domain.enums.diagram_audit_actor_type import (
+    DiagramAuditActorType,
+)
+from app.modules.diagram.domain.enums.diagram_audit_entity_type import (
+    DiagramAuditEntityType,
+)
 from app.modules.diagram.domain.enums.diagram_cardinality import (
     DiagramCardinality,
 )
@@ -13,6 +22,9 @@ from app.modules.diagram.domain.enums.diagram_relation_type import (
 
 __all__ = [
     "DiagramAttributeDataType",
+    "DiagramAuditAction",
+    "DiagramAuditActorType",
+    "DiagramAuditEntityType",
     "DiagramCardinality",
     "DiagramRelationHandle",
     "DiagramRelationType",

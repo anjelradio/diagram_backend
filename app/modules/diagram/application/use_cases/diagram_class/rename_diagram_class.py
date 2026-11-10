@@ -4,7 +4,15 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_class,
+)
 from app.modules.diagram.domain.entities.diagram_class import DiagramClass
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
+)
 from app.modules.diagram.domain.exceptions import (
     DiagramClassNotFoundException,
     InvalidDiagramClassNameException,
@@ -59,12 +67,33 @@ class RenameDiagramClassUseCase:
         if existing.name == clean_name:
             return existing
 
+        old_name = existing.name
+        payload_before = serialize_class(existing)
+
         existing.rename(clean_name)
+        payload_after = serialize_class(existing)
+
         self.diagram_class_repository.save(existing)
         self.uow.publish_event(DiagramClassRenamedEvent(
             project_id=existing.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"class_id": str(existing.id), "name": existing.name},
         ))
+        self.uow.publish_event(
+            create_diagram_audit_event(
+                project_id=existing.project_id,
+                user_id=command.user_id,
+                event_sender_id=command.event_sender_id,
+                entity_type=DiagramAuditEntityType.CLASS,
+                entity_id=existing.id,
+                entity_name=existing.name,
+                action=DiagramAuditAction.UPDATE,
+                use_case="RENAME_CLASS",
+                summary=f"Se renombró la clase de '{old_name}' a '{existing.name}'",
+                payload_before=payload_before,
+                payload_after=payload_after,
+            )
+        )
         self.uow.commit()
 
         return existing
+

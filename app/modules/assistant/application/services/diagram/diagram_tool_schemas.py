@@ -113,7 +113,10 @@ DIAGRAM_MUTATION_TOOL = AiToolDefinition(
                             "type": ["string", "null"],
                             "enum": [None, *(item.value for item in DiagramAttributeDataType)],
                         },
-                        "nullable": {"type": "boolean"},
+                        "nullable": {
+                            "type": "boolean",
+                            "description": "True si el atributo es opcional (puede ser null, ej. descripcion, notas, telefono, observaciones, foto, descuento); False si es obligatorio (campo nuclear, ej. nombre, precio, codigo, total, cantidad, stock, email).",
+                        },
                         "attributes": {
                             "type": "array",
                             "items": {
@@ -124,7 +127,10 @@ DIAGRAM_MUTATION_TOOL = AiToolDefinition(
                                         "type": ["string", "null"],
                                         "enum": [None, *(item.value for item in DiagramAttributeDataType)],
                                     },
-                                    "nullable": {"type": "boolean"},
+                                    "nullable": {
+                                        "type": "boolean",
+                                        "description": "True si el atributo es opcional (puede ser null, ej. descripcion, notas, telefono, observaciones, foto, descuento); False si es obligatorio (campo nuclear, ej. nombre, precio, codigo, total, cantidad, stock, email).",
+                                    },
                                 },
                                 "required": ["name"],
                                 "additionalProperties": False,
@@ -250,6 +256,11 @@ def _validate_action_fields(action: dict[str, Any]) -> None:
         raise AgentToolArgumentsException()
     if kind == "CREATE_CLASS" and "attributes" in action:
         _validate_create_class_attributes(action["attributes"])
+    if kind == "CREATE_RELATION":
+        if action.get("relation_type") != "ASSOCIATION":
+            action.pop("name", None)
+        elif "name" in action and isinstance(action["name"], str) and not action["name"].strip():
+            action.pop("name", None)
     if "name" in action and not _valid_name(action["name"]):
         raise AgentToolArgumentsException()
     if kind == "UPDATE_ATTRIBUTE" and not {"name", "data_type", "nullable"} & action.keys():

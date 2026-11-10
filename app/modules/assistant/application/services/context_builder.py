@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -42,6 +42,17 @@ class AgentContext:
     dialog_state: Any | None = None
     authorized_mode: str | None = None
     is_compound: bool = False
+    existing_classes: dict[str, str] | None = None
+    semantic_routed: bool = False
+
+
+def update_agent_context(context: Any, **changes: Any) -> Any:
+    """Actualiza de forma inmutable un AgentContext o muta un doble de prueba."""
+    if is_dataclass(context):
+        return replace(context, **changes)
+    for key, value in changes.items():
+        setattr(context, key, value)
+    return context
 
 
 class ContextBuilder:

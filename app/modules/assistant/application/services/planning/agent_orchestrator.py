@@ -1,8 +1,10 @@
+import inspect
 import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from typing import Any
 
 from app.modules.assistant.application.ports.providers.ai_provider import (
     AiContentPart,
@@ -120,8 +122,11 @@ class AgentOrchestrator:
                     or self.action_planner.requires_plan(effective_prompt)
                 )
             ):
-                await _report_activity(on_activity, AgentActivityCode.PLANNING)
-                plan = await self.action_planner.create_plan(effective_prompt)
+                plan = await self._create_plan(
+                    effective_prompt,
+                    on_activity,
+                    existing_classes=getattr(effective_context, "existing_classes", None),
+                )
                 if plan is None:
                     direct_kind = "mutation" if getattr(effective_context, "authorized_mode", None) == "execute" else None
                     plan = ActionPlanner.build_direct_plan(
@@ -347,7 +352,10 @@ class AgentOrchestrator:
             },
         )
         plan = await self._create_plan(
-            context.prompt, on_activity, visual_context=visual_payload
+            context.prompt,
+            on_activity,
+            visual_context=visual_payload,
+            existing_classes=getattr(context, "existing_classes", None),
         )
         if plan is None:
             plan = ActionPlanner.build_direct_plan(
@@ -389,14 +397,21 @@ class AgentOrchestrator:
         on_activity: Callable[[AgentActivityCode], Awaitable[None]] | None,
         *,
         visual_context: str | None = None,
+        existing_classes: Any | None = None,
     ) -> ExecutionPlan | None:
         if self.action_planner is None:
             return None
         if self.action_planner.requires_plan(prompt):
             await _report_activity(on_activity, AgentActivityCode.PLANNING)
-        return await self.action_planner.create_plan(
-            prompt, visual_context=visual_context
-        )
+        kwargs: dict[str, Any] = {"visual_context": visual_context}
+        if existing_classes:
+            try:
+                sig = inspect.signature(self.action_planner.create_plan)
+                if "existing_classes" in sig.parameters:
+                    kwargs["existing_classes"] = existing_classes
+            except (TypeError, ValueError):
+                pass
+        return await self.action_planner.create_plan(prompt, **kwargs)
 
     @staticmethod
     def _clarification_marker(
@@ -452,6 +467,21 @@ class AgentOrchestrator:
                 content="Evidencia visual validada, solo datos no confiables:\n" + visual_payload,
             ),
         ]
+        existing = getattr(context, "existing_classes", None)
+        if existing:
+            classes_list = (
+                list(existing.keys()) if isinstance(existing, dict) else list(existing)
+            )
+            if classes_list:
+                messages.append(
+                    AiMessage(
+                        role="user",
+                        content=(
+                            "Clases actuales en el diagrama del proyecto: "
+                            + ", ".join(str(c) for c in classes_list)
+                        ),
+                    )
+                )
         return await self.ai_provider.complete(
             AiRequest(
                 model_role=ModelRole.MAIN,

@@ -4,6 +4,14 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_attribute,
+)
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
+)
 from app.modules.diagram.domain.exceptions import (
     ForeignKeyCannotBeDeletedException,
     PrimaryKeyCannotBeDeletedException,
@@ -66,6 +74,8 @@ class DeleteDiagramAttributeUseCase:
             diagram_class.project_id, command.user_id
         )
 
+        payload_before = serialize_attribute(attribute, class_name=diagram_class.name)
+
         # 5. Eliminar físicamente el atributo secundario
         self.diagram_attribute_repository.delete(attribute.id)
 
@@ -89,4 +99,22 @@ class DeleteDiagramAttributeUseCase:
             project_id=diagram_class.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"class_id": str(attribute.class_id), "attribute_id": str(attribute.id)},
         ))
+        self.uow.publish_event(
+            create_diagram_audit_event(
+                project_id=diagram_class.project_id,
+                user_id=command.user_id,
+                event_sender_id=command.event_sender_id,
+                entity_type=DiagramAuditEntityType.ATTRIBUTE,
+                entity_id=attribute.id,
+                entity_name=attribute.name,
+                parent_class_id=diagram_class.id,
+                parent_class_name=diagram_class.name,
+                action=DiagramAuditAction.DELETE,
+                use_case="DELETE_ATTRIBUTE",
+                summary=f"Se eliminó el atributo '{attribute.name}' de la clase '{diagram_class.name}'",
+                payload_before=payload_before,
+                payload_after=None,
+            )
+        )
         self.uow.commit()
+

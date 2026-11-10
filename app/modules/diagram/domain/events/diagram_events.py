@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditActorType,
+    DiagramAuditEntityType,
+)
 from app.shared.domain.domain_event import DomainEvent
 
 
@@ -68,3 +73,24 @@ class DiagramRelationRenamedEvent(DiagramMutationEvent):
 @dataclass(frozen=True, kw_only=True)
 class DiagramRelationDeletedEvent(DiagramMutationEvent):
     operation_type: str = "DELETE_RELATION"
+
+
+@dataclass(frozen=True, kw_only=True)
+class DiagramAuditRecordedEvent(DomainEvent):
+    """Evento emitido tras una mutación auditada para su persistencia en la bitácora."""
+
+    project_id: UUID
+    user_id: str
+    actor_type: DiagramAuditActorType
+    entity_type: DiagramAuditEntityType
+    entity_id: UUID
+    entity_name: str
+    action: DiagramAuditAction
+    use_case: str
+    summary: str
+    parent_class_id: UUID | None = None
+    parent_class_name: str | None = None
+    payload_before: dict[str, Any] | None = None
+    payload_after: dict[str, Any] | None = None
+    user_name: str | None = None
+

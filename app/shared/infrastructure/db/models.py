@@ -21,6 +21,7 @@ from app.modules.collaboration.infrastructure.persistence.models.project_member_
 from app.modules.diagram.infrastructure.persistence.models.diagram_class_model import DiagramClassModel
 from app.modules.diagram.infrastructure.persistence.models.diagram_attribute_model import DiagramAttributeModel
 from app.modules.diagram.infrastructure.persistence.models.diagram_relation_model import DiagramRelationModel
+from app.modules.diagram.infrastructure.persistence.models.diagram_audit_log_model import DiagramAuditLogModel
 
 # Módulo Assistant
 from app.modules.assistant.infrastructure.persistence.models.agent_message_model import AgentMessageModel

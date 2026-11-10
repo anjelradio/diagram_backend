@@ -14,7 +14,11 @@ Los imports de los handlers se hacen dentro de la función para evitar
 importaciones circulares entre módulos.
 """
 
+import logging
+
 from app.shared.domain.event_bus import EventBus
+
+logger = logging.getLogger(__name__)
 
 
 def configure_event_subscriptions(event_bus: EventBus) -> None:
@@ -29,6 +33,7 @@ def configure_event_subscriptions(event_bus: EventBus) -> None:
         DiagramAttributeDeletedEvent,
         DiagramAttributeRepositionedEvent,
         DiagramAttributeUpdatedEvent,
+        DiagramAuditRecordedEvent,
         DiagramClassCreatedEvent,
         DiagramClassDeletedEvent,
         DiagramClassMovedEvent,
@@ -55,3 +60,17 @@ def configure_event_subscriptions(event_bus: EventBus) -> None:
         DiagramRelationDeletedEvent,
     ):
         event_bus.subscribe(event_type, websocket_broadcast_handler.handle)
+
+    def handle_diagram_audit_recorded(event: DiagramAuditRecordedEvent) -> None:
+        logger.info(
+            "DiagramAuditRecorded: project_id=%s entity=%s:%s action=%s actor=%s user=%s",
+            event.project_id,
+            getattr(event.entity_type, "value", str(event.entity_type)),
+            event.entity_name,
+            getattr(event.action, "value", str(event.action)),
+            getattr(event.actor_type, "value", str(event.actor_type)),
+            event.user_name or event.user_id,
+        )
+
+    event_bus.subscribe(DiagramAuditRecordedEvent, handle_diagram_audit_recorded)
+

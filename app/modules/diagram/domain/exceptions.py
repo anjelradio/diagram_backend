@@ -205,3 +205,11 @@ class BridgeClassCannotBeDeletedDirectlyException(ConflictException):
 
     code = "BRIDGE_CLASS_CANNOT_BE_DELETED_DIRECTLY"
     message = "Una clase puente solo puede eliminarse a través de su relación propietaria."
+
+
+class InvalidDiagramAuditLogException(ValidationException):
+    """Los datos de la entrada de bitácora no cumplen las invariantes."""
+
+    code = "INVALID_DIAGRAM_AUDIT_LOG"
+    message = "Los datos de auditoría son inválidos o están incompletos."
+

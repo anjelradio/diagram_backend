@@ -4,8 +4,16 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_class,
+)
 from app.modules.diagram.domain.entities.diagram_attribute import DiagramAttribute
 from app.modules.diagram.domain.entities.diagram_class import DiagramClass
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
+)
 from app.modules.diagram.domain.exceptions import (
     DiagramClassIdConflictException,
 )
@@ -117,6 +125,22 @@ class CreateDiagramClassUseCase:
                                 "is_nullable": pk.is_nullable, "is_foreign_key": pk.is_foreign_key}],
             },
         ))
+        self.uow.publish_event(
+            create_diagram_audit_event(
+                project_id=command.project_id,
+                user_id=command.user_id,
+                event_sender_id=command.event_sender_id,
+                entity_type=DiagramAuditEntityType.CLASS,
+                entity_id=diagram_class.id,
+                entity_name=diagram_class.name,
+                action=DiagramAuditAction.CREATE,
+                use_case="CREATE_CLASS",
+                summary=f"Se creó la clase '{diagram_class.name}'",
+                payload_before=None,
+                payload_after=serialize_class(diagram_class, attributes=[pk]),
+            )
+        )
         self.uow.commit()
+
 
         return diagram_class, [pk], True

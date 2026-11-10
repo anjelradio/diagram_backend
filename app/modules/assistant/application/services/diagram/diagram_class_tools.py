@@ -21,7 +21,10 @@ from app.modules.assistant.domain.dialog.key_attribute_rules import (
     is_foreign_key_name,
     is_primary_key_name,
 )
-from app.modules.assistant.domain.dialog.slot_schema import infer_attribute_type
+from app.modules.assistant.domain.dialog.slot_schema import (
+    infer_attribute_nullability,
+    infer_attribute_type,
+)
 from app.modules.collaboration.application.services.project_access_policy import (
     ProjectAccessPolicy,
 )
@@ -194,7 +197,7 @@ class DiagramClassTools:
                 (attribute for attribute in existing_attributes if attribute.is_primary_key),
                 None,
             )
-            refs = [{"type": "class", "id": str(existing.id)}]
+            refs = [{"type": "class", "id": str(existing.id), "name": existing.name}]
             if primary_key is not None:
                 refs.append({"type": "attribute", "id": str(primary_key.id)})
             effects = (
@@ -238,7 +241,11 @@ class DiagramClassTools:
                                 name=attr_name,
                                 position=next_pos,
                                 data_type=data_type,
-                                is_nullable=attr_spec.get("nullable", True),
+                                is_nullable=(
+                                    attr_spec["nullable"]
+                                    if attr_spec.get("nullable") is not None
+                                    else infer_attribute_nullability(attr_name)
+                                ),
                                 event_sender_id="assistant",
                             )
                         )
@@ -283,7 +290,7 @@ class DiagramClassTools:
             action,
             status="validated",
             entity_refs=[
-                {"type": "class", "id": str(class_id)},
+                {"type": "class", "id": str(class_id), "name": name},
                 {"type": "attribute", "id": str(primary_id)},
             ],
         )
@@ -309,7 +316,7 @@ class DiagramClassTools:
                 diagram_class.id, AgentReservationActivityType.EDIT
             )
         refs = [
-            {"type": "class", "id": str(diagram_class.id)},
+            {"type": "class", "id": str(diagram_class.id), "name": diagram_class.name},
             {"type": "attribute", "id": str(attributes[0].id)},
         ]
         derived_effects: list[dict[str, str]] = []
@@ -354,7 +361,11 @@ class DiagramClassTools:
                         name=attr_name,
                         position=next_pos,
                         data_type=data_type,
-                        is_nullable=attr_spec.get("nullable", True),
+                        is_nullable=(
+                            attr_spec["nullable"]
+                            if attr_spec.get("nullable") is not None
+                            else infer_attribute_nullability(attr_name)
+                        ),
                         event_sender_id="assistant",
                     )
                 )
@@ -387,7 +398,7 @@ class DiagramClassTools:
                 event_sender_id="assistant",
             )
         )
-        refs = [{"type": "class", "id": str(result.id)}]
+        refs = [{"type": "class", "id": str(result.id), "name": result.name}]
         await _report(report, action, status="applied", entity_refs=refs)
         return {"status": "applied", "entity_refs": refs}
 
@@ -396,7 +407,7 @@ class DiagramClassTools:
     ) -> dict[str, Any]:
         self.access_policy.ensure_write_access(self.project_id, self.user_id)
         class_id = UUID(action["class_id"])
-        self._ensure_active_class(class_id)
+        target_model = self._ensure_active_class(class_id)
         owning_relation = self.relation_repository.find_by_bridge_class_id(class_id)
         if self.reservation_emitter is not None:
             await self.reservation_emitter.reserve_class(
@@ -414,7 +425,7 @@ class DiagramClassTools:
                 action,
                 status="validated",
                 entity_refs=[
-                    {"type": "class", "id": str(class_id)},
+                    {"type": "class", "id": str(class_id), "name": target_model.name},
                     {"type": "relation", "id": str(owning_relation.id)},
                 ],
             )
@@ -429,7 +440,10 @@ class DiagramClassTools:
             effects = [{"type": "deleted_bridge_class", "id": str(class_id)}]
         else:
             await _report(
-                report, action, status="validated", entity_refs=[{"type": "class", "id": str(class_id)}]
+                report,
+                action,
+                status="validated",
+                entity_refs=[{"type": "class", "id": str(class_id), "name": target_model.name}],
             )
             DeleteDiagramClassUseCase(
                 self.access_policy,
@@ -445,7 +459,7 @@ class DiagramClassTools:
                     event_sender_id="assistant",
                 )
             )
-            refs = [{"type": "class", "id": str(class_id)}]
+            refs = [{"type": "class", "id": str(class_id), "name": target_model.name}]
             effects = []
         await _report(
             report, action, status="applied", entity_refs=refs, derived_effects=effects

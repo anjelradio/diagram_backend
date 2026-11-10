@@ -139,6 +139,8 @@ def _format_tool_result_summary(tool_name: str, result: Any) -> str:
         el = result.get("element", {})
         ename = el.get("name", "") if isinstance(el, dict) else ""
         return f"status={status}, elemento='{ename}'"
+    if tool_name == "inspect_diagram_state":
+        return f"status={status}, {result.get('total_classes', 0)} clases, {result.get('total_relations', 0)} relaciones"
     return f"status={status}"
 
 
@@ -148,9 +150,47 @@ _PENDING_MUTATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_INLINE_JSON_BLOCK_PATTERN = re.compile(
+    r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```",
+    re.DOTALL | re.IGNORECASE,
+)
+
 
 def _has_pending_mutation_text(text: str) -> bool:
     return bool(_PENDING_MUTATION_PATTERN.search(text))
+
+
+def _extract_inline_mutation_tool_call(text: str) -> AiToolCall | None:
+    """Extrae un bloque JSON de mutaciones inline cuando el modelo omite tool_calls nativo."""
+    if not text or ("actions" not in text and "kind" not in text):
+        return None
+    candidates: list[str] = [m.group(1) for m in _INLINE_JSON_BLOCK_PATTERN.finditer(text)]
+    if not candidates:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            candidates.append(text[start : end + 1])
+    for raw in candidates:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        actions: Any = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("actions"), list):
+            actions = parsed["actions"]
+        elif isinstance(parsed, list):
+            actions = parsed
+        if (
+            isinstance(actions, list)
+            and actions
+            and all(isinstance(item, dict) and bool(item.get("kind")) for item in actions)
+        ):
+            return AiToolCall(
+                id=f"inline_{uuid4().hex[:12]}",
+                name="apply_diagram_changes",
+                arguments={"actions": actions},
+            )
+    return None
 
 
 def _missing_expected_actions(
@@ -267,7 +307,7 @@ class PlanExecutor:
     ) -> AiResult:
         is_direct = plan is None or (len(plan.tasks) == 1 and plan.tasks[0].get("id") == "direct")
         intent = classify_agent_intent(context.prompt)
-        if is_direct and intent.action == "clarify":
+        if is_direct and intent.action == "clarify" and not getattr(context, "semantic_routed", False):
             clarification_msg = (
                 "Tu solicitud resulta ambigua y no define con certeza la acción a realizar. "
                 "Por favor aclara si deseas crear o modificar una entidad para proceder con seguridad."
@@ -586,6 +626,15 @@ class PlanExecutor:
                             completed=False,
                         )
                     clean_direct = sanitize_markdown_response(direct_text) if direct_text else ""
+                    if not clean_direct and execution_plan.operation_ledger:
+                        facts = extract_communicable_facts(
+                            ledger_entries=execution_plan.operation_ledger,
+                            tasks=execution_plan.tasks,
+                            task_results=task_results,
+                            cancelled=execution_plan.status == "cancelled",
+                        )
+                        if facts:
+                            clean_direct = format_deterministic_response(facts, "mutation")
                     return AiResult(
                         text=clean_direct or "No pude obtener un resultado verificable.",
                         model_role=ModelRole.MAIN,
@@ -747,6 +796,7 @@ class PlanExecutor:
                     w in combined_lower
                     for w in (
                         "relacion", "relación", "asocia", "hereda", "agrega", "compone", "depende",
+                        "conecta", "vincula", "une", "padre", "hija", "hijo", "superclase", "subclase",
                         "cardinalidad", "fk", "foreign", "puente", "intermedia", "generalizacion",
                         "generalización", "asociacion", "asociación", "composicion", "composición",
                         "agregacion", "agregación", "1:n", "n:m", "1:1", "m:n", "0..*", "1..*",
@@ -944,7 +994,20 @@ class PlanExecutor:
                     ),
                 )
             )
-            if not result.tool_calls:
+            effective_tool_calls = result.tool_calls
+            if (
+                not effective_tool_calls
+                and requires_mutation
+                and (not allowed_names or "apply_diagram_changes" in allowed_names)
+            ):
+                inline_call = _extract_inline_mutation_tool_call(result.text or "")
+                if inline_call is not None:
+                    logger.info(
+                        "[Fase 5 · Ejecución] Tool call inline extraído desde bloque JSON de texto (task_id=%s)",
+                        task_id,
+                    )
+                    effective_tool_calls = (inline_call,)
+            if not effective_tool_calls:
                 if expected_actions:
                     missing = _missing_expected_actions(
                         expected_actions, plan.operation_ledger, task_id
@@ -958,7 +1021,8 @@ class PlanExecutor:
                                 content=(
                                     "La tarea aún no está completa. Faltan operaciones confirmadas: "
                                     + json.dumps(missing, ensure_ascii=False)
-                                    + ". Consulta el estado actual antes de aplicar solo lo pendiente."
+                                    + ". Consulta el estado actual antes de aplicar solo lo pendiente. "
+                                    "NO escribas bloques JSON en el texto de respuesta; invoca directamente la herramienta nativa apply_diagram_changes."
                                 ),
                             ))
                             continue
@@ -978,7 +1042,7 @@ class PlanExecutor:
                     messages.append(AiMessage(
                         role="user",
                         content=(
-                            "No emitas texto conversacional preliminar sobre acciones futuras. "
+                            "No emitas texto conversacional preliminar sobre acciones futuras ni bloques JSON en texto. "
                             "Ejecuta inmediatamente la llamada a `apply_diagram_changes` con las operaciones pendientes ahora."
                         ),
                     ))
@@ -1001,13 +1065,13 @@ class PlanExecutor:
             messages.append(
                 AiMessage(
                     role="assistant",
-                    content=result.text,
-                    tool_calls=result.tool_calls,
+                    content=result.text if result.tool_calls else "",
+                    tool_calls=effective_tool_calls,
                 )
             )
             tool_messages: list[AiMessage] = []
             skip_remaining_calls = False
-            for call in result.tool_calls:
+            for call in effective_tool_calls:
                 tool_calls_used += 1
                 logger.info(
                     "[Fase 5 · Ejecución] Tool call propuesto (#%s): %s",
@@ -1948,7 +2012,7 @@ def _confirmed_tool_result(
             return None
         return {"status": "applied", "results": confirmed_actions}
 
-    if tool_name == "search_diagram_elements":
+    if tool_name in {"search_diagram_elements", "inspect_diagram_state"}:
         return result if result.get("status") == "ok" else None
     if tool_name == "get_diagram_element":
         if result.get("error_code") or not {"type", "id", "detail"} <= result.keys():
@@ -2076,6 +2140,8 @@ def _contains_delete_action(arguments: Any) -> bool:
 def _read_activity_code(tool_name: str, arguments: dict[str, Any]) -> AgentActivityCode | None:
     if tool_name in {"search_project_conversation", "get_project_conversation_message"}:
         return AgentActivityCode.RECALLING_CONVERSATION
+    if tool_name == "inspect_diagram_state":
+        return AgentActivityCode.READING_DIAGRAM
     if tool_name not in {"search_diagram_elements", "get_diagram_element"}:
         return None
     if tool_name == "get_diagram_element":

@@ -4,7 +4,15 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_attribute,
+)
 from app.modules.diagram.domain.entities.diagram_attribute import UNSET, DiagramAttribute
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
+)
 from app.modules.diagram.domain.enums.diagram_attribute_data_type import (
     DiagramAttributeDataType,
 )
@@ -64,12 +72,16 @@ class UpdateDiagramAttributeUseCase:
             diagram_class.project_id, command.user_id
         )
 
+        payload_before = serialize_attribute(attribute, class_name=diagram_class.name)
+
         # 3. Aplicar mutaciones en la entidad de dominio (valida invariantes y protege PK)
         attribute.update_details(
             name=command.name,
             data_type=command.data_type,
             is_nullable=command.is_nullable,
         )
+
+        payload_after = serialize_attribute(attribute, class_name=diagram_class.name)
 
         # 4. Persistir y confirmar transacción
         self.diagram_attribute_repository.save(attribute)
@@ -79,6 +91,25 @@ class UpdateDiagramAttributeUseCase:
                   "name": attribute.name, "data_type": attribute.data_type.value if attribute.data_type else None,
                   "is_nullable": attribute.is_nullable},
         ))
+        if payload_before != payload_after:
+            self.uow.publish_event(
+                create_diagram_audit_event(
+                    project_id=diagram_class.project_id,
+                    user_id=command.user_id,
+                    event_sender_id=command.event_sender_id,
+                    entity_type=DiagramAuditEntityType.ATTRIBUTE,
+                    entity_id=attribute.id,
+                    entity_name=attribute.name,
+                    parent_class_id=diagram_class.id,
+                    parent_class_name=diagram_class.name,
+                    action=DiagramAuditAction.UPDATE,
+                    use_case="UPDATE_ATTRIBUTE",
+                    summary=f"Se modificó el atributo '{attribute.name}' en la clase '{diagram_class.name}'",
+                    payload_before=payload_before,
+                    payload_after=payload_after,
+                )
+            )
         self.uow.commit()
 
         return attribute
+

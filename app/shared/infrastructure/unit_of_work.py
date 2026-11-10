@@ -69,6 +69,77 @@ class SqlModelUnitOfWork:
             if not any(tracked is entity for tracked in self._tracked_aggregates):
                 self._tracked_aggregates.append(entity)
 
+    def _persist_audit_logs_before_commit(self) -> None:
+        """Persiste atómicamente los eventos DiagramAuditRecordedEvent en la misma transacción."""
+        if not self._pending_events:
+            return
+
+        audit_events = [
+            e
+            for e in self._pending_events
+            if e.__class__.__name__ == "DiagramAuditRecordedEvent"
+        ]
+        if not audit_events:
+            return
+
+        try:
+            from app.modules.diagram.infrastructure.persistence.models.diagram_audit_log_model import (
+                DiagramAuditLogModel,
+            )
+            from app.shared.infrastructure.db.better_auth import BetterAuthUser
+
+            for event in audit_events:
+                user_name = getattr(event, "user_name", None)
+                user_id = getattr(event, "user_id", "")
+                if not user_name or user_name == user_id:
+                    try:
+                        user = self.session.get(BetterAuthUser, user_id)
+                        if user and user.name:
+                            user_name = user.name
+                    except Exception:
+                        pass
+                if not user_name:
+                    user_name = user_id
+
+                actor_type_val = (
+                    event.actor_type.value
+                    if hasattr(event.actor_type, "value")
+                    else str(event.actor_type)
+                )
+                entity_type_val = (
+                    event.entity_type.value
+                    if hasattr(event.entity_type, "value")
+                    else str(event.entity_type)
+                )
+                action_val = (
+                    event.action.value
+                    if hasattr(event.action, "value")
+                    else str(event.action)
+                )
+
+                model = DiagramAuditLogModel(
+                    id=event.event_id,
+                    project_id=event.project_id,
+                    user_id=user_id,
+                    user_name=user_name,
+                    actor_type=actor_type_val,
+                    entity_type=entity_type_val,
+                    entity_id=event.entity_id,
+                    entity_name=event.entity_name,
+                    parent_class_id=event.parent_class_id,
+                    parent_class_name=event.parent_class_name,
+                    action=action_val,
+                    use_case=event.use_case,
+                    summary=event.summary,
+                    payload_before=event.payload_before,
+                    payload_after=event.payload_after,
+                    created_date=event.occurred_at,
+                )
+                self.session.add(model)
+        except Exception:
+            logger.exception("Error al persistir DiagramAuditRecordedEvent antes del commit")
+            raise
+
     def commit(self) -> None:
         """
         Persiste los cambios en BD y despacha los Domain Events acumulados.
@@ -80,10 +151,12 @@ class SqlModelUnitOfWork:
         4. La lista de aggregates trackeados se limpia siempre.
         """
         try:
+            self._persist_audit_logs_before_commit()
             self.session.commit()
         except Exception:
             self.rollback()
             raise
+
 
         logger.debug("UnitOfWork — commit exitoso")
 

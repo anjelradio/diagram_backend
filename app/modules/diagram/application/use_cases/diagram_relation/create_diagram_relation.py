@@ -5,8 +5,16 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_relation,
+)
 from app.modules.diagram.application.services.diagram_relation_materializer import (
     validate_relation_materialization,
+)
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
 )
 from app.modules.diagram.domain.services.diagram_relation_materialization_policy import (
     MaterializationStrategy,
@@ -309,6 +317,31 @@ class CreateDiagramRelationUseCase:
                   "removed_class_ids": [],
                   "removed_attribute_ids": []},
         ))
+        rel_display = relation.name if relation.name else relation.relation_type.value
+        self.uow.publish_event(
+            create_diagram_audit_event(
+                project_id=command.project_id,
+                user_id=command.user_id,
+                event_sender_id=command.event_sender_id,
+                entity_type=DiagramAuditEntityType.RELATION,
+                entity_id=relation.id,
+                entity_name=rel_display,
+                action=DiagramAuditAction.CREATE,
+                use_case="CREATE_RELATION",
+                summary=f"Se creó la relación '{rel_display}' entre '{source_class.name}' y '{target_class.name}'",
+                payload_before=None,
+                payload_after=serialize_relation(
+                    relation,
+                    source_class_name=source_class.name,
+                    target_class_name=target_class.name,
+                    materialization={
+                        "strategy": plan.strategy.value,
+                        "materialized_classes": materialized_classes,
+                    },
+                ),
+            )
+        )
         self.uow.commit()
+
 
         return relation, True

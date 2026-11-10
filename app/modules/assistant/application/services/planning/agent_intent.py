@@ -25,7 +25,7 @@ _DELETE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _RELATION_PATTERNS = re.compile(
-    r"\b(relaci[oó]na(?:r|las|los)?|con[eé]cta(?:r|las|los)?|vinc[uú]la(?:r|las|los)?|"
+    r"\b(relaci[oó]na(?:r|la|lo|las|los)?|con[eé]cta(?:r|la|lo|las|los)?|vinc[uú]la(?:r|la|lo|las|los)?|"
     r"relate|connect)\b",
     re.IGNORECASE,
 )
@@ -59,7 +59,9 @@ _REQUEST_SUBJUNCTIVE_RELATE = re.compile(
 )
 _QUERY_PATTERNS = re.compile(
     r"\b(qué|dime|consulta(?:r)?|busca(?:r)?|explica(?:r)?|describe|describir|"
-    r"revisa(?:r)?|cuál|cual|cuántas|cuantas|cuántos|cuantos|how|what|analyze|inspect|tell\s+me)\b",
+    r"revisa(?:r)?|cuál|cual|cuáles|cuales|cuántas|cuantas|cuántos|cuantos|"
+    r"lista(?:r)?|muestra|muéstrame|muestrame|sugiere|recomienda|aconseja|"
+    r"how|what|analyze|inspect|tell\s+me)\b",
     re.IGNORECASE,
 )
 _NEGATION_PATTERNS = re.compile(
@@ -69,7 +71,8 @@ _NEGATION_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _HYPOTHETICAL_OR_DOUBT_PATTERNS = re.compile(
-    r"\b(debería|deberia|podría|podria|sería\s+bueno|seria\s+bueno|se\s+puede|conviene)\b",
+    r"\b(debería|deberia|podría|podria|sería\s+bueno|seria\s+bueno|se\s+puede|conviene|"
+    r"qué\s+me\s+recomiendas|que\s+me\s+recomiendas|qué\s+sugieres|que\s+sugieres)\b",
     re.IGNORECASE,
 )
 _CITED_EXAMPLE_PATTERNS = re.compile(

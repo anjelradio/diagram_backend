@@ -185,7 +185,11 @@ class DiagramRelationTools:
         source_cardinality = _cardinality(action.get("source_cardinality"))
         target_cardinality = _cardinality(action.get("target_cardinality"))
         raw_name = action.get("name")
-        name = (raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else "Nueva relación") if relation_type is DiagramRelationType.ASSOCIATION else (raw_name.strip() if isinstance(raw_name, str) else "")
+        name = (
+            raw_name.strip()
+            if isinstance(raw_name, str) and raw_name.strip()
+            else "Nueva relación"
+        ) if relation_type is DiagramRelationType.ASSOCIATION else ""
         existing_models = self.session.exec(
             select(DiagramRelationModel).where(
                 DiagramRelationModel.project_id == self.project_id,

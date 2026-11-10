@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import logging
 import re
@@ -110,11 +111,33 @@ class ActionPlanner:
         return intent_requires_mutation(prompt)
 
     async def create_plan(
-        self, prompt: str, *, visual_context: str | None = None
+        self,
+        prompt: str,
+        *,
+        visual_context: str | None = None,
+        existing_classes: Sequence[str] | dict[str, Any] | None = None,
     ) -> ExecutionPlan | None:
         if not self.requires_plan(prompt):
             return None
         user_messages = [AiMessage(role="user", content=prompt)]
+        if existing_classes:
+            classes_list = (
+                list(existing_classes.keys())
+                if isinstance(existing_classes, dict)
+                else list(existing_classes)
+            )
+            if classes_list:
+                user_messages.append(
+                    AiMessage(
+                        role="user",
+                        content=(
+                            "Clases que ya existen actualmente en el diagrama (no generes "
+                            "tareas CREATE_CLASS para ellas salvo que se pida recrearlas; "
+                            "úsalas directamente como existentes al agregar atributos o "
+                            "crear relaciones): " + ", ".join(str(c) for c in classes_list)
+                        ),
+                    )
+                )
         if visual_context is not None:
             user_messages.append(
                 AiMessage(

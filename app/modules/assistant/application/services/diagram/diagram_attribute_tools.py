@@ -19,7 +19,10 @@ from app.modules.assistant.domain.dialog.key_attribute_rules import (
     is_foreign_key_name,
     is_primary_key_name,
 )
-from app.modules.assistant.domain.dialog.slot_schema import infer_attribute_type
+from app.modules.assistant.domain.dialog.slot_schema import (
+    infer_attribute_nullability,
+    infer_attribute_type,
+)
 from app.modules.collaboration.application.services.project_access_policy import (
     ProjectAccessPolicy,
 )
@@ -227,7 +230,11 @@ class DiagramAttributeTools:
                     if action.get("data_type") is not None
                     else DiagramAttributeDataType(infer_attribute_type(action.get("name")))
                 ),
-                is_nullable=action.get("nullable", True),
+                is_nullable=(
+                    action["nullable"]
+                    if action.get("nullable") is not None
+                    else infer_attribute_nullability(action.get("name"))
+                ),
                 event_sender_id="assistant",
             )
         )

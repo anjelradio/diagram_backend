@@ -33,7 +33,10 @@ from app.modules.assistant.domain.entities.agent_continuation import (
     ContinuationState,
 )
 from app.modules.assistant.application.services.planning.agent_orchestrator import AgentOrchestrator
-from app.modules.assistant.application.services.context_builder import ContextBuilder
+from app.modules.assistant.application.services.context_builder import (
+    ContextBuilder,
+    update_agent_context,
+)
 from app.modules.assistant.application.services.agent_trace import trace_agent_message
 from app.modules.assistant.application.ports.providers.ai_provider import AiResult, ModelRole
 from app.modules.assistant.application.services.execution.agent_response import (
@@ -144,6 +147,13 @@ _AMBIGUOUS_RELATION_WITHOUT_TARGETS = re.compile(
     re.IGNORECASE,
 )
 
+_DOMAIN_REASONING_OR_MUTATION_PATTERNS = re.compile(
+    r"\b(?:relaci[oó]n|relaciona(?:r|las|los)?|asocia(?:r|ci[oó]n)?|composici[oó]n|agregaci[oó]n|"
+    r"herencia|generalizaci[oó]n|vincula(?:r)?|conecta(?:r|las|los)?|"
+    r"atributo[s]?|campo[s]?)\b",
+    re.IGNORECASE,
+)
+
 
 def _needs_semantic_context_resolution(
     prompt: str,
@@ -158,6 +168,8 @@ def _needs_semantic_context_resolution(
     if _CONTEXT_DEPENDENT_INDICATORS.search(clean):
         return True
     if _AMBIGUOUS_RELATION_WITHOUT_TARGETS.search(clean):
+        return True
+    if _DOMAIN_REASONING_OR_MUTATION_PATTERNS.search(clean):
         return True
     return False
 
@@ -291,10 +303,14 @@ class ProcessAgentMessageUseCase:
                             for ex in reversed(raw_exchanges)
                             if not getattr(ex, "is_superseded", False)
                         ]
-                        if is_dataclass(context):
-                            context = replace(context, recent_turns=recent_turns_list)
-                        else:
-                            setattr(context, "recent_turns", recent_turns_list)
+                        context = update_agent_context(context, recent_turns=recent_turns_list)
+                if getattr(context, "existing_classes", None) is None and self.class_provider is not None:
+                    try:
+                        known_classes = self.class_provider(message.project_id) or {}
+                        if known_classes:
+                            context = update_agent_context(context, existing_classes=known_classes)
+                    except Exception as exc:
+                        logger.warning("No se pudieron cargar las clases existentes para el contexto: %s", exc)
                 logger.info(
                     "[Fase 3 · Contexto] Contexto preparado (message_id=%s, memory_tokens=%s, "
                     "requires_compaction=%s, has_image=%s)",
@@ -739,19 +755,14 @@ class ProcessAgentMessageUseCase:
             context = self.context_builder.build(message)
             req_mutation = classify_agent_intent(message.prompt).requires_mutation
             auth_mode = "execute" if req_mutation else "read_only"
-            if is_dataclass(context):
-                context = replace(
-                    context,
-                    effective_request=message.prompt,
-                    prompt=message.prompt,
-                    authorized_mode=auth_mode,
-                    recent_turns=recent_turns,
-                )
-            else:
-                setattr(context, "effective_request", message.prompt)
-                setattr(context, "prompt", message.prompt)
-                setattr(context, "authorized_mode", auth_mode)
-                setattr(context, "recent_turns", recent_turns)
+            context = update_agent_context(
+                context,
+                effective_request=message.prompt,
+                prompt=message.prompt,
+                authorized_mode=auth_mode,
+                recent_turns=recent_turns,
+                existing_classes=existing_classes,
+            )
             return context, None, None
 
         decision = await self.semantic_intent_router.route_turn(
@@ -829,19 +840,15 @@ class ProcessAgentMessageUseCase:
         if decision.category == SemanticCategory.CONCEPTUAL_CONSULTATION:
             context = self.context_builder.build(message)
             effective_request = decision.resolved_goal or message.prompt
-            if is_dataclass(context):
-                context = replace(
-                    context,
-                    effective_request=effective_request,
-                    prompt=effective_request,
-                    authorized_mode="read_only",
-                    recent_turns=recent_turns,
-                )
-            else:
-                setattr(context, "effective_request", effective_request)
-                setattr(context, "prompt", effective_request)
-                setattr(context, "authorized_mode", "read_only")
-                setattr(context, "recent_turns", recent_turns)
+            context = update_agent_context(
+                context,
+                effective_request=effective_request,
+                prompt=effective_request,
+                authorized_mode="read_only",
+                recent_turns=recent_turns,
+                existing_classes=existing_classes,
+                semantic_routed=True,
+            )
             return context, None, None
 
         claimed: AgentContinuation | None = None
@@ -863,21 +870,16 @@ class ProcessAgentMessageUseCase:
         auth_mode = "execute" if decision.requires_mutation else "read_only"
         effective_request = decision.resolved_goal or message.prompt
         is_compound = decision.category == SemanticCategory.COMPOUND_ACTION
-        if is_dataclass(context):
-            context = replace(
-                context,
-                effective_request=effective_request,
-                prompt=effective_request,
-                authorized_mode=auth_mode,
-                recent_turns=recent_turns,
-                is_compound=is_compound,
-            )
-        else:
-            setattr(context, "effective_request", effective_request)
-            setattr(context, "prompt", effective_request)
-            setattr(context, "authorized_mode", auth_mode)
-            setattr(context, "recent_turns", recent_turns)
-            setattr(context, "is_compound", is_compound)
+        context = update_agent_context(
+            context,
+            effective_request=effective_request,
+            prompt=effective_request,
+            authorized_mode=auth_mode,
+            recent_turns=recent_turns,
+             is_compound=is_compound,
+            existing_classes=existing_classes,
+            semantic_routed=True,
+        )
 
         return context, None, claimed
 

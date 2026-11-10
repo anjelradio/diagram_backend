@@ -50,6 +50,7 @@ def create_default_prompt_catalog() -> dict[str, PromptPolicy]:
                 "Usa IDs de tarea como strings cortos y únicos (por ejemplo `create-user`) y usa esos mismos strings dentro de `depends_on`.\n"
                 "Agrupa acciones relacionadas en objetivos coherentes; no hagas una tarea por cada atributo simple. Mantén una única tarea de respuesta al final cuando haya preguntas.\n\n"
                 "Cuando el usuario pida crear una clase y sus atributos (ej. «Crea la clase Proveedor con nombre, direccion y telefono»), planifícala SIEMPRE en una sola tarea atómica `CREATE_CLASS` con su arreglo de atributos, en lugar de dividir la creación en tareas separadas.\n"
+                "Si el usuario pide crear MÚLTIPLES clases nuevas (con o sin atributos), agrúpalas TODAS en una ÚNICA tarea en lote (ej. `create-classes` con todas las entradas `CREATE_CLASS` en `expected_actions`) y agrupa TODAS las relaciones nuevas entre ellas en una ÚNICA tarea dependiente (`create-relations` con `depends_on: [\"create-classes\"]`), en lugar de generar una tarea separada por cada clase o relación.\n"
                 "Agrupa clases independientes en un lote; después agrupa atributos por clase y crea relaciones cuando sus extremos tengan ID confirmado. Cada acción explícita debe figurar en `expected_actions`, incluso si comparte tarea con otras.\n\n"
                 "Interpretación de intención:\n"
                 "- Reconoce expresiones comunes equivalentes: «haz», «crea», «agrega», «añade», «genera» implican creación; «edita», «modifica», «actualiza», «renombra» implican edición; «elimina», «borra», «quita», «remueve» implican eliminación.\n"
@@ -61,7 +62,7 @@ def create_default_prompt_catalog() -> dict[str, PromptPolicy]:
                 "3. Una relación depende de las tareas que crean sus extremos solo cuando el usuario pidió crearlos.\n"
                 "Una clase mencionada como extremo se busca en el diagrama durante la ejecución. Nunca generes una tarea para crearla salvo petición explícita.\n"
                 "Las clases se crean con su PK por defecto y no necesitan atributos adicionales.\n"
-                "Si faltan tipo, cardinalidades o dirección imprescindibles de una relación, solicita aclaración antes de planificar mutaciones.\n"
+                "Si el usuario pide relacionar dos clases sin detallar tipo o cardinalidades, razona autónomamente la relación idónea del dominio (asociación con cardinalidades cruzadas o estructural con roles canónicos); solo solicita aclaración y espera la respuesta del usuario si falta identificar una de las clases o hay ambigüedad insalvable.\n"
                 "4. Si se solicitan atributos en una clase puente (N:M), la tarea de atributos del puente debe depender de la tarea que crea la relación.\n"
                 "5. Las tareas verdaderamente independientes no deben tener dependencias artificiales entre sí.\n"
                 "Coloca todas las consultas/respuestas después de las mutaciones y haz que dependan de ellas. No incluyas acciones de mover clases ni creaciones manuales de llaves primarias, foráneas o clases puente: las clases generan sus PK y las relaciones generan sus FK y puentes.\n"
@@ -81,7 +82,7 @@ def create_default_prompt_catalog() -> dict[str, PromptPolicy]:
                 "Usa las herramientas autorizadas para buscar, consultar o cambiar el diagrama.\n"
                 "Una PK se crea automáticamente con su clase; las FK y clases puente se generan al crear relaciones. No solicites crear esos efectos por separado. No puedes mover clases.\n"
                 "Si el nombre coincide con varios elementos, pregunta cuál.\n"
-                "Verifica siempre el estado presente usando las herramientas autorizadas; ejecuta solo la solicitud actual.\n"
+                "Verifica siempre el estado presente usando las herramientas autorizadas (prefiere `inspect_diagram_state` para consultar de una vez todas las clases, atributos y relaciones actuales); ejecuta solo la solicitud actual.\n"
                 "En tareas dependientes, usa solo IDs de resultados confirmados (`entity_refs`) de las operaciones aplicadas en sus prerequisitos; no inventes IDs ni infieras el ID de una clase puente por su nombre. Para clases puente de relaciones N:M, reutiliza el ID materializado en `derived_effects` de la relación confirmada.\n"
                 "Puedes crear una clase con todos sus atributos en una sola acción `CREATE_CLASS` pasando `attributes: [{\"name\": \"...\"}, ...]`. Para clases existentes, si debes agregar múltiples atributos, DEBES enviar todas las acciones `CREATE_ATTRIBUTE` juntas en el arreglo `actions: [...]` de una sola llamada a `apply_diagram_changes`. Está terminantemente PROHIBIDO crear atributos uno por uno en llamadas separadas si corresponden a la misma clase; agrúpalos siempre en una sola llamada.\n"
                 "NUNCA devuelvas texto conversacional preliminar como «Procedo a...», «A continuación...» o «Voy a crear...» mientras queden operaciones por ejecutar. Si faltan operaciones, DEBES invocar inmediatamente la herramienta correspondiente en el mismo turno. Solo devuelve texto final cuando todas las operaciones hayan sido confirmadas con herramientas.\n"
@@ -193,7 +194,7 @@ def create_default_prompt_catalog() -> dict[str, PromptPolicy]:
             text=(
                 "Reglas Canónicas para CREATE_RELATION:\n"
                 "- Asociación (ASSOCIATION): exige obligatoriamente cardinalidad en ambos extremos (`source_cardinality` y `target_cardinality` con '1', '0..1', '0..*' o '1..*', normalizando '1..1' a '1'). No tiene cabeza estructural.\n"
-                "- Relaciones estructurales (COMPOSITION, AGGREGATION, GENERALIZATION, REALIZATION, DEPENDENCY): prohíben toda cardinalidad (debe ser null u omitida). Están prohibidas las formas mixtas (ej. composición con cardinalidad).\n"
+                "- Relaciones estructurales (COMPOSITION, AGGREGATION, GENERALIZATION, REALIZATION, DEPENDENCY): prohíben toda cardinalidad y etiqueta `name` (tanto `source_cardinality`, `target_cardinality` como `name` deben ser null u omitidos). Están prohibidas las formas mixtas (ej. composición con cardinalidad o nombre).\n"
                 "- Roles semánticos y dirección (source → target):\n"
                 "  * Generalización (herencia): la cabeza (triángulo) está en la superclase (`target_class_id`) y conecta a la subclase (`source_class_id`). REGLA INVIOLABLE: La clase padre/superclase es SIEMPRE `target_class_id`; la clase hija/subclase es SIEMPRE `source_class_id`. Ejemplo: si el usuario pide 'conéctalas con herencia donde Usuario sea el padre y Administrador la hija', DEBES asignar `target_class_id` = ID de Usuario y `source_class_id` = ID de Administrador.\n"
                 "  * Composición y agregación: la cabeza (diamante) está en el todo (`source_class_id`) y conecta a la parte (`target_class_id`).\n"
@@ -207,7 +208,7 @@ def create_default_prompt_catalog() -> dict[str, PromptPolicy]:
                 "  * En apply_diagram_changes, `kind` es SIEMPRE `CREATE_RELATION` con `relation_type: \"ASSOCIATION\"`. ¡Nunca uses kind: \"ASSOCIATION\"!\n"
                 "- Extremos explícitos: si el usuario menciona dónde está la cabeza (ej. «la cabeza de composición está en Casa y conecta Habitación»), traduce los extremos a los roles canónicos.\n"
                 "- Clases puente e intermedias (N:M): las llaves foráneas (FK) y clases puente se generan automáticamente al crear la relación. No solicites crear llaves foráneas ni clases puente por separado. Para añadir atributos a una clase intermedia (N:M), reutiliza el ID materializado en `derived_effects` de la relación confirmada.\n"
-                "- Aclaración y no mutación: si falta una cardinalidad de asociación, la dirección/rol estructural es incierto, o el nombre de una clase es ambiguo, NO invoques herramientas de mutación; haz una pregunta breve para aclarar."
+                "- Razonamiento autónomo de relaciones: cuando ambas clases están identificadas pero no se especificaron tipo o cardinalidades, infiere la relación más coherente del dominio (asociación con cardinalidades cruzadas y verbo en español, o estructural con roles canónicos todo/parte o superclase/subclase). Solo solicita aclaración si el nombre de una clase es ambiguo o falta identificar una de las clases extremas."
             ),
             phases=frozenset({"execution"}),
             capabilities=frozenset({"relations"}),

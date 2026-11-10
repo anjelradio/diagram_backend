@@ -4,7 +4,15 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.services.diagram_audit_serializer import (
+    create_diagram_audit_event,
+    serialize_attribute,
+)
 from app.modules.diagram.domain.entities.diagram_attribute import DiagramAttribute
+from app.modules.diagram.domain.enums import (
+    DiagramAuditAction,
+    DiagramAuditEntityType,
+)
 from app.modules.diagram.domain.enums.diagram_attribute_data_type import DiagramAttributeDataType
 from app.modules.diagram.domain.exceptions import (
     DiagramAttributeIdConflictException,
@@ -118,6 +126,24 @@ class CreateDiagramAttributeUseCase:
                   "position": new_attr.position, "is_primary_key": new_attr.is_primary_key,
                   "is_nullable": new_attr.is_nullable, "is_foreign_key": new_attr.is_foreign_key},
         ))
+        self.uow.publish_event(
+            create_diagram_audit_event(
+                project_id=diagram_class.project_id,
+                user_id=command.user_id,
+                event_sender_id=command.event_sender_id,
+                entity_type=DiagramAuditEntityType.ATTRIBUTE,
+                entity_id=new_attr.id,
+                entity_name=new_attr.name,
+                parent_class_id=diagram_class.id,
+                parent_class_name=diagram_class.name,
+                action=DiagramAuditAction.CREATE,
+                use_case="CREATE_ATTRIBUTE",
+                summary=f"Se agregó el atributo '{new_attr.name}' a la clase '{diagram_class.name}'",
+                payload_before=None,
+                payload_after=serialize_attribute(new_attr, class_name=diagram_class.name),
+            )
+        )
         self.uow.commit()
+
 
         return new_attr, True

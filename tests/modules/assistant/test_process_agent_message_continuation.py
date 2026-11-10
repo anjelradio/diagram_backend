@@ -620,7 +620,7 @@ async def test_accepts_recent_recommendation_without_resuming_an_old_pending_req
     if has_old_pending:
         assert continuations.find_by_id(pending.id).state == ContinuationState.AWAITING_INPUT
     reader.get_recent_exchanges.assert_called_once_with(
-        project_id=project_id, user_id=user_id, exclude_message_id=message.id, limit=3,
+        project_id=project_id, user_id=user_id, exclude_message_id=message.id, limit=8,
     )
     provider.complete.assert_awaited_once()
     payload = json.loads(provider.complete.await_args.args[0].messages[1].content)

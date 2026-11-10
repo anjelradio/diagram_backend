@@ -16,7 +16,8 @@ _CREATE_PATTERNS = re.compile(
 )
 _UPDATE_PATTERNS = re.compile(
     r"\b(edita(?:r)?|modifica(?:r)?|actualiza(?:r)?|renombra(?:r)?|ajusta(?:r)?|"
-    r"cambia(?:r)?\s+(?:el\s+)?nombre|edit|update|rename|modify|adjust)\b",
+    r"cambia(?:r)?\s+(?:el\s+)?nombre|sincroni[zs]a(?:r|lo|la|los|las)?|sin\s*croni[zs]a(?:r|lo|la|los|las)?|"
+    r"despliega(?:r)?|migra(?:r)?|sync|edit|update|rename|modify|adjust)\b",
     re.IGNORECASE,
 )
 _DELETE_PATTERNS = re.compile(
@@ -50,7 +51,9 @@ _RELATION_CONFIGURATION_PATTERNS = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _REQUEST_SUBJUNCTIVE_CREATE = re.compile(
-    r"\b(?:quiero|necesito|pido|solicito)\s+que\s+(?:me\s+)?(?:crees|haga(?:s)?)\b",
+    r"\b(?:quiero|necesito|pido|solicito)\s+que\s+(?:me\s+)?(?:crees|haga(?:s)?)\b|"
+    r"\b(?:coloques?|colocar|col[oó]calos?|col[oó]calas?|agr[eé]galos?|agr[eé]galas?|"
+    r"a[ñn][aá]delos?|a[ñn][aá]delas?|p[oó]nlos?|p[oó]nlas?|cr[eé]alos?|cr[eé]alas?)\b",
     re.IGNORECASE,
 )
 _REQUEST_SUBJUNCTIVE_RELATE = re.compile(
@@ -95,6 +98,23 @@ _EXPLICIT_BATCH = re.compile(
     r"[\w`]+(?:\s*\([^)]*\))?(?:\s*,\s*[\w`]+(?:\s*\([^)]*\))?)*(?:\s+y\s+[\w`]+(?:\s*\([^)]*\))?)\b",
     re.IGNORECASE,
 )
+
+
+def is_neon_sync_prompt(prompt: str) -> bool:
+    """Detecta si la orden solicita sincronizar, migrar o desplegar la base de datos en Neon."""
+    clean = prompt.strip().casefold()
+    if not clean:
+        return False
+    has_sync_verb = bool(re.search(
+        r"\b(?:sincroni[zs]a(?:r|lo|la|los|las)?|sin\s*croni[zs]a(?:r|lo|la|los|las)?|despliega(?:r)?|migra(?:r)?|actualiza(?:r)?|sync)\b",
+        clean,
+    ))
+    has_neon_ref = any(term in clean for term in ("neon", "postgres", "postgresql", "base de datos", "bd", "proyecto"))
+    if has_sync_verb and has_neon_ref:
+        return True
+    if "neon" in clean and any(w in clean for w in ("sincron", "desplieg", "migra", "actualiz")):
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +181,20 @@ def classify_agent_intent(prompt: str) -> AgentIntent:
     # 4. Preguntas o dudas hipotéticas
     is_question = "?" in cleaned or "¿" in cleaned
     is_hypothetical = bool(_HYPOTHETICAL_OR_DOUBT_PATTERNS.search(cleaned))
-    if is_hypothetical or (is_question and not _SEQUENCE_MARKERS.search(cleaned) and not has_direct_mutation_command(cleaned)):
+    has_compound_order = bool(
+        _SEQUENCE_MARKERS.search(cleaned)
+        or re.match(
+            r"^(?:por\s+favor\s+)?\b(?:crea|haz|agrega|añade|genera|modifica|edita|actualiza|elimina|borra|quita|relaciona|conecta|vincula)\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"\b(?:y\s+)?(?:col[oó]ca(?:l[ao]s?)?|agr[eé]ga(?:l[ao]s?)?|p[oó]n(?:l[ao]s?)?|cr[eé]a(?:l[ao]s?)?|aplicar?|hazl[ao]|a[ñn][aá]de(?:l[ao]s?)?)\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+    )
+    if (is_hypothetical or is_question) and not has_compound_order:
         return AgentIntent(
             action="query",
             target=cleaned,
@@ -200,6 +233,16 @@ def classify_agent_intent(prompt: str) -> AgentIntent:
             action="update",
             target=cleaned,
             scope=None,
+            certainty="high",
+            requires_mutation=True,
+            raw_prompt=prompt,
+        )
+
+    if is_neon_sync_prompt(cleaned) and not _NEGATION_PATTERNS.search(cleaned):
+        return AgentIntent(
+            action="update",
+            target=cleaned,
+            scope="neon",
             certainty="high",
             requires_mutation=True,
             raw_prompt=prompt,
@@ -250,6 +293,7 @@ def has_direct_mutation_command(prompt: str) -> bool:
         or _RELATION_PATTERNS.search(prompt)
         or _REQUEST_SUBJUNCTIVE_RELATE.search(prompt)
         or _ACTION_ON_RELATION_OR_ANAPHORA.search(prompt)
+        or is_neon_sync_prompt(prompt)
     )
 
 
@@ -267,6 +311,43 @@ def requires_plan(prompt: str) -> bool:
         return False
 
     cleaned = prompt.strip()
+
+    # Operaciones atómicas de sincronización con Neon (sin mutaciones previas en el diagrama) se ejecutan directamente
+    is_atomic_neon_op = is_neon_sync_prompt(cleaned) and not any(
+        kw in cleaned.lower()
+        for kw in (
+            "crea", "crear", "agrega", "agregar", "elimina", "eliminar", "borra", "borrar",
+            "modifica", "modificar", "y luego", "después", "despues", "además", "ademas"
+        )
+    )
+    if is_atomic_neon_op:
+        return False
+
+    # Operaciones atómicas de Notion (crear, actualizar o eliminar una tarea) no requieren descomposición en DAG
+    is_atomic_notion_op = "notion" in cleaned.lower() and any(
+        kw in cleaned.lower()
+        for kw in (
+            "create_notion_task",
+            "update_notion_task",
+            "delete_notion_task",
+            "crear una nueva tarea en notion",
+            "crear una tarea en notion",
+            "agrega esa sugerencia a una tarea",
+            "crear tarea en notion",
+        )
+    ) and not any(
+        kw in cleaned.lower()
+        for kw in (
+            "ejecutar tarea",
+            "ejecuta la tarea",
+            "realiza la tarea",
+            "haz la tarea",
+            "marcar la tarea como done",
+        )
+    )
+    if is_atomic_notion_op:
+        return False
+
     create_count = len(_CREATE_PATTERNS.findall(cleaned)) + len(_REQUEST_SUBJUNCTIVE_CREATE.findall(cleaned))
     update_count = len(_UPDATE_PATTERNS.findall(cleaned))
     delete_count = len(_DELETE_PATTERNS.findall(cleaned))
@@ -278,7 +359,7 @@ def requires_plan(prompt: str) -> bool:
     )
     mutation_count = create_count + update_count + delete_count + relation_count
 
-    has_query = bool(_QUERY_PATTERNS.search(cleaned)) or "?" in cleaned or "¿" in cleaned
+    has_query = bool(_QUERY_PATTERNS.search(cleaned)) or "?" in cleaned or "¿" in cleaned or bool(_HYPOTHETICAL_OR_DOUBT_PATTERNS.search(cleaned))
     has_sequence = bool(_SEQUENCE_MARKERS.search(cleaned))
 
     has_classes_and_relations = bool(

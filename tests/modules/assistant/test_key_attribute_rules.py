@@ -61,7 +61,10 @@ def test_is_foreign_key_name_detection():
     # En clase Producto, atributos referenciando otras entidades
     assert is_foreign_key_name("categoria_id", class_name="Producto") is True
     assert is_foreign_key_name("id_categoria", class_name="Producto") is True
+    assert is_foreign_key_name("categoriaId", class_name="Producto") is True
+    assert is_foreign_key_name("idCategoria", class_name="Producto") is True
     assert is_foreign_key_name("usuario_id", class_name="Producto") is True
+    assert is_foreign_key_name("usuarioId", class_name="Producto") is True
     assert is_foreign_key_name("fk_proveedor", class_name="Producto") is True
     assert is_foreign_key_name("cliente_fk", class_name="Producto") is True
 
@@ -69,6 +72,8 @@ def test_is_foreign_key_name_detection():
     assert is_foreign_key_name("id", class_name="Producto") is False
     assert is_foreign_key_name("producto_id", class_name="Producto") is False
     assert is_foreign_key_name("id_producto", class_name="Producto") is False
+    assert is_foreign_key_name("productoId", class_name="Producto") is False
+    assert is_foreign_key_name("idProducto", class_name="Producto") is False
 
     # Atributos ordinarios
     assert is_foreign_key_name("nombre", class_name="Producto") is False
@@ -80,6 +85,8 @@ def test_is_foreign_key_name_detection():
 def test_extract_referenced_entity_from_fk():
     assert extract_referenced_entity_from_fk("categoria_id") == "categoria"
     assert extract_referenced_entity_from_fk("id_categoria") == "categoria"
+    assert extract_referenced_entity_from_fk("categoriaId") == "categoria"
+    assert extract_referenced_entity_from_fk("idCategoria") == "categoria"
     assert extract_referenced_entity_from_fk("fk_usuario") == "usuario"
     assert extract_referenced_entity_from_fk("cliente_fk") == "cliente"
     assert extract_referenced_entity_from_fk("nombre") is None
@@ -122,7 +129,7 @@ def test_semantic_validator_rejects_isolated_key_attributes():
 
 
 def test_turn_signals_isolated_fk_and_pk_intent():
-    # Petición aislada de FK
+    # Petición aislada de FK explícita
     sig_fk1 = extract_turn_signals("Crea una llave foránea en la clase Producto")
     assert sig_fk1.is_fk_request is True
     assert sig_fk1.target_class_hint == "Producto"
@@ -134,15 +141,35 @@ def test_turn_signals_isolated_fk_and_pk_intent():
     assert sig_fk2.target_class_hint == "Producto"
     assert sig_fk2.related_class_hint == "Categoría"
 
-    # Petición aislada de PK
-    sig_pk = extract_turn_signals("Crea una llave primaria en Producto")
-    assert sig_pk.is_pk_request is True
-    assert sig_pk.target_class_hint == "Producto"
+    # Petición de atributo con nombre de FK en snake_case y camelCase
+    sig_fk3 = extract_turn_signals("Crea el atributo categoria_id en la clase Producto")
+    assert sig_fk3.is_fk_request is True
+    assert sig_fk3.target_class_hint == "Producto"
+    assert sig_fk3.related_class_hint == "Categoria"
+
+    sig_fk4 = extract_turn_signals("Agrega el campo categoriaId a Producto")
+    assert sig_fk4.is_fk_request is True
+    assert sig_fk4.target_class_hint == "Producto"
+    assert sig_fk4.related_class_hint == "Categoria"
+
+    # Petición aislada de PK explícita y por atributo id
+    sig_pk1 = extract_turn_signals("Crea una llave primaria en Producto")
+    assert sig_pk1.is_pk_request is True
+    assert sig_pk1.target_class_hint == "Producto"
+
+    sig_pk2 = extract_turn_signals("Crea el atributo id en la clase Producto")
+    assert sig_pk2.is_pk_request is True
+    assert sig_pk2.target_class_hint == "Producto"
 
     # Creación de clase normal no es petición aislada de FK ni PK
     sig_normal = extract_turn_signals("Crea una clase Producto con id, nombre y precio")
     assert sig_normal.is_fk_request is False
     assert sig_normal.is_pk_request is False
+
+    # Creación de múltiples atributos normales y con FK no es petición aislada
+    sig_multi = extract_turn_signals("Agrega a Producto los atributos nombre, precio y categoria_id")
+    assert sig_multi.is_fk_request is False
+    assert sig_multi.is_pk_request is False
 
 
 @pytest.mark.anyio

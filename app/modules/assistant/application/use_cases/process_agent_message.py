@@ -82,6 +82,7 @@ from app.modules.assistant.domain.entities.execution_plan import ExecutionPlan
 from app.modules.collaboration.application.services.project_access_policy import (
     ProjectAccessPolicy,
 )
+from app.modules.projects.domain.enums.project_access_role import ProjectAccessRole
 from app.core.config import settings
 from app.modules.assistant.application.services.dialog.dialog_manager import DialogManager
 from app.modules.assistant.application.services.dialog.turn_interpreter import (
@@ -96,10 +97,27 @@ from app.modules.assistant.application.services.intent import (
 )
 from app.modules.assistant.application.services.planning.agent_intent import (
     classify_agent_intent,
+    is_neon_sync_prompt,
 )
 from app.modules.assistant.domain.dialog.dialog_frame import DialogFrame, DialogState
 from app.modules.projects.domain.exceptions import ProjectNotFoundException
 from app.shared.application.ports import UnitOfWork
+
+from app.modules.integrations.application.ports.providers.notion_integration_provider import (
+    NotionIntegrationProvider,
+)
+from app.modules.integrations.application.services.integration_crypto_service import (
+    IntegrationCryptoService,
+)
+from app.modules.integrations.domain.enums.integration_provider import (
+    IntegrationProvider,
+)
+from app.modules.integrations.domain.enums.notion_task_status import (
+    NotionTaskStatus,
+)
+from app.modules.integrations.domain.repositories.project_integration_repository import (
+    ProjectIntegrationRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +125,136 @@ _EXPLICIT_RETRY_PATTERN = re.compile(
     r"\b(?:reintenta\w*|reintentar|reanuda\w*|reanudar|contin[uú]a(?:\s+con)?|sigue(?:\s+con)?)\b",
     re.IGNORECASE,
 )
+
+_ORDINAL_MAP: dict[str, int] = {
+    "primera": 0, "primero": 0, "primer": 0, "1": 0, "1ra": 0, "1ro": 0, "1era": 0, "1ero": 0,
+    "segunda": 1, "segundo": 1, "2": 1, "2da": 1, "2do": 1,
+    "tercera": 2, "tercero": 2, "tercer": 2, "3": 2, "3ra": 2, "3ro": 2,
+    "cuarta": 3, "cuarto": 3, "4": 3, "4ta": 3, "4to": 3,
+    "quinta": 4, "quinto": 4, "5": 4, "5ta": 4, "5to": 4,
+    "última": -1, "ultima": -1, "último": -1, "ultimo": -1,
+}
+
+
+def _is_notion_related_prompt(prompt: str) -> bool:
+    clean = prompt.strip().casefold()
+    if "notion" in clean:
+        return True
+    if re.search(r"\b(?:tareas?\s+de\s+notion|pendientes?\s+de\s+notion|tareas?\s+en\s+notion)\b", clean):
+        return True
+    return False
+
+
+def _is_neon_related_prompt(prompt: str) -> bool:
+    clean = prompt.strip().casefold()
+    if "neon" in clean:
+        return True
+    if re.search(r"\b(?:despliega|desplegar|migra|migrar|sincroniza|sincronizar)\s+(?:la\s+)?(?:bd|base\s+de\s+datos|postgres|postgresql)\b", clean):
+        return True
+    return False
+
+
+def _is_direct_neon_mutation_bypass_attempt(prompt: str) -> bool:
+    clean = prompt.strip().casefold()
+    if not any(term in clean for term in ("neon", "base de datos", "bd", "postgres", "postgresql")):
+        return False
+    mutation_verbs = r"\b(?:elimina(?:r)?|borra(?:r)?|quita(?:r)?|modifica(?:r)?|altera(?:r)?|cambia(?:r)?|drop|alter)\b"
+    db_targets = r"\b(?:tabla|tablas|columna|columnas|campo|campos|table|tables|column|columns)\b"
+    neon_mentions = r"\b(?:en\s+neon|de\s+neon|en\s+la\s+base\s+de\s+datos|en\s+la\s+bd|en\s+postgres|en\s+postgresql)\b"
+    return bool(re.search(f"{mutation_verbs}.*{db_targets}.*{neon_mentions}", clean)) or bool(re.search(f"{mutation_verbs}.*{neon_mentions}.*{db_targets}", clean))
+
+
+def _is_multiple_notion_tasks_request(prompt: str) -> bool:
+    clean = prompt.strip().casefold()
+    if not ("notion" in clean or "tarea" in clean or "pendiente" in clean):
+        return False
+    patterns = [
+        r"\b(?:todas|todos|cada\s+una)\b",
+        r"\b(?:varias|m[uú]ltiples)\b",
+        r"\b(?:ambas|los\s+dos|las\s+dos)\b",
+        r"\b(?:tareas?\s+\d+\s+y\s+\d+)\b",
+        r"\b(?:tarea\s+\w+\s+y\s+tarea)\b",
+    ]
+    is_execution = bool(re.search(
+        r"\b(?:haz|hacer|ejecuta(?:r)?|aplica(?:r)?|realiza(?:r)?|procesa(?:r)?|implementa(?:r)?)\b",
+        clean,
+    ))
+    return is_execution and any(re.search(p, clean) for p in patterns)
+
+
+def _is_single_notion_task_execution_request(
+    prompt: str,
+    recent_turns: list[dict[str, Any]] | None = None,
+) -> bool:
+    clean = prompt.strip().casefold()
+    if _is_multiple_notion_tasks_request(prompt):
+        return False
+    has_exec_verb = bool(re.search(
+        r"\b(?:ejecuta(?:r)?|haz|hacer|aplica(?:r)?|realiza(?:r)?|procesa(?:r)?|implementa(?:r)?)\b",
+        clean,
+    ))
+    has_task_ref = bool(re.search(
+        r"\b(?:tarea|tareas|notion|pendiente|pendientes)\b",
+        clean,
+    ))
+    if not has_task_ref and recent_turns:
+        has_cached_tasks = any(
+            isinstance(t, dict) and t.get("notion_tasks")
+            for t in recent_turns
+        )
+        if has_cached_tasks and any(re.search(r"\b" + re.escape(w) + r"\b", clean) for w in _ORDINAL_MAP):
+            has_task_ref = True
+
+    has_crud_verb = bool(re.search(
+        r"\b(?:crea(?:r)?|agrega(?:r)?|a[ñn]ade(?:r)?|elimina(?:r)?|borra(?:r)?|quita(?:r)?|lista(?:r)?|muestra(?:r)?|ver|modifica(?:r)?|cambia(?:r)?|actualiza(?:r)?|cancela(?:r)?)\b",
+        clean,
+    ))
+    return has_exec_verb and has_task_ref and not has_crud_verb
+
+
+def _is_mixed_diagram_and_notion_request(
+    prompt: str,
+    recent_turns: list[dict[str, Any]] | None = None,
+) -> bool:
+    clean = prompt.strip().casefold()
+    if not ("notion" in clean or re.search(r"\b(?:tareas?\s+de\s+notion|pendientes?\s+de\s+notion)\b", clean)):
+        return False
+
+    if _is_single_notion_task_execution_request(prompt, recent_turns=recent_turns):
+        return False
+
+    if re.search(r"^(?:s[ií]|dale|hazlo|procede|adelante)\b", clean):
+        last_turn = recent_turns[-1] if recent_turns else {}
+        last_assistant = str(last_turn.get("assistant") or last_turn.get("content") or "").casefold()
+        offered_canvas_changes = any(phrase in last_assistant for phrase in (
+            "en tu lienzo", "en tu diagrama", "estos cambios", "estas relaciones", "estos atributos", "esta clase"
+        ))
+        if offered_canvas_changes and ("notion" in clean or "tarea" in clean):
+            return True
+
+    diagram_mutation_patterns = [
+        r"\b(?:crea(?:r)?|agrega(?:r)?|a[ñn]ade(?:r)?|elimina(?:r)?|borra(?:r)?|modifica(?:r)?|relaciona(?:r)?|conecta(?:r)?)\b.*?\b(?:clase|clases|atributo|atributos|relaci[oó]n|relaciones|tabla|tablas|lienzo)\b",
+        r"\b(?:clase|clases|atributo|atributos|relaci[oó]n|relaciones|tabla|tablas|lienzo)\b.*?\b(?:crea(?:r)?|agrega(?:r)?|a[ñn]ade(?:r)?|elimina(?:r)?|borra(?:r)?|modifica(?:r)?|relaciona(?:r)?|conecta(?:r)?)\b",
+    ]
+    notion_action_patterns = [
+        r"\b(?:crea(?:r)?|agrega(?:r)?|a[ñn]ade(?:r)?|haz|hacer|pon|guarda(?:r)?|lista(?:r)?|dime|muestra|ver|elimina(?:r)?|actualiza(?:r)?)\b.*?\bnotion\b",
+        r"\bnotion\b.*?\b(?:crea(?:r)?|agrega(?:r)?|a[ñn]ade(?:r)?|haz|hacer|pon|guarda(?:r)?|lista(?:r)?|dime|muestra|ver|elimina(?:r)?|actualiza(?:r)?)\b",
+    ]
+    has_diagram_mutation = any(re.search(p, clean) for p in diagram_mutation_patterns)
+    has_notion_action = any(re.search(p, clean) for p in notion_action_patterns)
+    has_compound_connector = bool(re.search(
+        r"\b(?:y\s+adem[aá]s|adem[aá]s|y\s+tambi[eé]n|tambi[eé]n|y\s+luego|al\s+mismo\s+tiempo|despu[eé]s)\b",
+        clean,
+    ))
+
+    if has_diagram_mutation and has_notion_action and has_compound_connector:
+        return True
+
+    if re.search(r"\b(?:crea|agrega|a[ñn]ade|guarda)\s+(?:una\s+)?tarea\s+(?:en|de)\s+notion\b", clean):
+        if not has_compound_connector:
+            return False
+
+    return False
 
 
 def _is_explicit_retry(prompt: str) -> bool:
@@ -135,6 +283,7 @@ _CONTEXT_DEPENDENT_INDICATORS = re.compile(
     r"\b(?:esa|ese|esos|esas|eso|est[ae]s?|con[eé]cta(?:las|los)?|relaci[oó]na(?:las|los)?|"
     r"aplica(?:r|lo|la|los|las)?|implementa(?:r|lo|la|los|las)?|haz(?:lo)?|dale|"
     r"cancela(?:r)?|olv[ií]da(?:lo)?|descarta(?:r)?|dejalo\s+as[ií]|d[eé]jalo\s+as[ií]|"
+    r"sugerencia[s]?|recomendaci[oó]n(?:es)?|propuesta[s]?|"
     r"lo\s+(?:anterior|dicho|sugerido|propuesto|recomendado|acordado)|"
     r"y\s+(?:adem[aá]s|luego|despu[eé]s))\b|"
     r"[¿?]",
@@ -154,13 +303,18 @@ _DOMAIN_REASONING_OR_MUTATION_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+_CONFIRM_PATTERN = re.compile(
+    r"^(?:si\b|ok\b|okay\b|yes\b|dale\b|hazlo\b|procede\b|adelante\b|vale\b|claro\b|perfecto\b|de acuerdo\b|confirmo\b|me parece bien\b)",
+    re.IGNORECASE,
+)
+
 
 def _needs_semantic_context_resolution(
     prompt: str,
     has_recent_turns: bool,
     has_active_continuation: bool,
 ) -> bool:
-    if has_active_continuation or has_recent_turns:
+    if has_active_continuation:
         return True
     clean = prompt.strip()
     if not clean:
@@ -169,6 +323,20 @@ def _needs_semantic_context_resolution(
         return True
     if _AMBIGUOUS_RELATION_WITHOUT_TARGETS.search(clean):
         return True
+    if _is_notion_related_prompt(clean):
+        return True
+    if starts_independent_class_request(clean):
+        return False
+    if is_neon_sync_prompt(clean):
+        if _CONFIRM_PATTERN.search(clean):
+            return True
+        return False
+    if has_recent_turns:
+        if _DOMAIN_REASONING_OR_MUTATION_PATTERNS.search(clean):
+            return True
+        if _CONFIRM_PATTERN.search(clean):
+            return True
+        return False
     if _DOMAIN_REASONING_OR_MUTATION_PATTERNS.search(clean):
         return True
     return False
@@ -206,6 +374,10 @@ class ProcessAgentMessageUseCase:
         dialog_manager: DialogManager | None = None,
         semantic_intent_router: SemanticIntentRouter | None = None,
         class_provider: Callable[[UUID], dict[str, str]] | None = None,
+        class_attributes_provider: Callable[[UUID], dict[str, list[str]]] | None = None,
+        integration_repository: ProjectIntegrationRepository | None = None,
+        notion_provider: NotionIntegrationProvider | None = None,
+        crypto_service: IntegrationCryptoService | None = None,
     ) -> None:
         self.message_repository = message_repository
         self.memory_repository = memory_repository
@@ -216,6 +388,10 @@ class ProcessAgentMessageUseCase:
         self.dialog_manager = dialog_manager
         self.semantic_intent_router = semantic_intent_router
         self.class_provider = class_provider
+        self.class_attributes_provider = class_attributes_provider
+        self.integration_repository = integration_repository
+        self.notion_provider = notion_provider
+        self.crypto_service = crypto_service
         self.project_access_policy = project_access_policy
         self.context_builder = context_builder
         self.orchestrator = orchestrator
@@ -276,6 +452,43 @@ class ProcessAgentMessageUseCase:
 
             context, immediate_result = self._resolve_visual_clarification(message)
 
+            if immediate_result is None and context is None and _is_multiple_notion_tasks_request(message.prompt):
+                immediate_result = AiResult(
+                    text=(
+                        "Solo puedo ejecutar una tarea de Notion a la vez para mantener la coherencia del diagrama. "
+                        "Por favor, selecciona una única tarea para comenzar."
+                    ),
+                    model_role=ModelRole.MAIN,
+                    model="notion_policy",
+                    completed=True,
+                    metadata={"kind": "notion_policy", "outcome": "rejected_multiple_tasks"},
+                )
+
+            if immediate_result is None and context is None and _is_mixed_diagram_and_notion_request(message.prompt):
+                immediate_result = AiResult(
+                    text=(
+                        "He detectado que solicitas tanto modificaciones en el diagrama como acciones en Notion. "
+                        "Para mantener la coherencia y el orden en tu proyecto, estas acciones deben gestionarse por separado. "
+                        "¿Deseas que primero aplique los cambios en el lienzo o que primero gestione la tarea en Notion?"
+                    ),
+                    model_role=ModelRole.MAIN,
+                    model="notion_policy",
+                    completed=True,
+                    metadata={"kind": "notion_policy", "outcome": "mixed_diagram_and_notion_rejected"},
+                )
+
+            # T009: Pre-flight check para solicitudes relacionadas con Notion
+            if immediate_result is None and context is None and _is_notion_related_prompt(message.prompt):
+                immediate_result = self._check_notion_integration_readiness(message.project_id)
+
+            # Pre-flight check para solicitudes relacionadas con Neon
+            if immediate_result is None and context is None and _is_neon_related_prompt(message.prompt):
+                immediate_result = self._check_neon_integration_readiness(
+                    message.project_id,
+                    message.user_id,
+                    message.prompt,
+                )
+
             if immediate_result is None and context is None and message.image_url is None:
                 context, immediate_result = self._check_pre_plan_metamodel_gate(message)
 
@@ -291,7 +504,7 @@ class ProcessAgentMessageUseCase:
                 if context is None:
                     context = self.context_builder.build(message)
                 if getattr(context, "recent_turns", None) is None:
-                    raw_exchanges = self._get_recent_exchanges(message, limit=3)
+                    raw_exchanges = self._get_recent_exchanges(message, limit=8)
                     if raw_exchanges:
                         recent_turns_list = [
                             {
@@ -609,7 +822,7 @@ class ProcessAgentMessageUseCase:
     def _get_recent_exchanges(
         self,
         message: AgentMessage,
-        limit: int = 3,
+        limit: int = 8,
     ) -> Sequence[Any]:
         if self.conversation_reader is None:
             return ()
@@ -706,6 +919,111 @@ class ProcessAgentMessageUseCase:
             )
             return None, ai_res
 
+    def _check_notion_integration_readiness(self, project_id: UUID) -> AiResult | None:
+        if self.integration_repository is None or self.notion_provider is None or self.crypto_service is None:
+            return AiResult(
+                text="Para utilizar Notion en este proyecto, primero debes activarlo e ingresar tu API Key desde el menú de Integraciones.",
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+                metadata={"kind": "notion_policy", "outcome": "integration_not_available"},
+            )
+        integration = self.integration_repository.find_by_project_and_provider(
+            project_id,
+            IntegrationProvider.NOTION,
+        )
+        if integration is None or not integration.encrypted_api_key:
+            return AiResult(
+                text="Para utilizar Notion en este proyecto, primero debes activarlo e ingresar tu API Key desde el menú de Integraciones.",
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+                metadata={"kind": "notion_policy", "outcome": "unconfigured_api_key"},
+            )
+        if not integration.is_initialized or not integration.external_database_id:
+            return AiResult(
+                text="La integración con Notion aún no ha sido inicializada en este proyecto. Por favor, inicialízala desde el menú de Integraciones para comenzar a gestionar tareas.",
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+                metadata={"kind": "notion_policy", "outcome": "uninitialized_project"},
+            )
+        return None
+
+    def _check_neon_integration_readiness(
+        self,
+        project_id: UUID,
+        user_id: str,
+        prompt: str,
+    ) -> AiResult | None:
+        # 1. Regla de negocio: Exclusividad absoluta del propietario (OWNER)
+        try:
+            access_context = self.project_access_policy.resolve_access(project_id, user_id)
+            if access_context.access_role != ProjectAccessRole.OWNER:
+                return AiResult(
+                    text=(
+                        "Solo el propietario (creador) del proyecto tiene permisos para desplegar, "
+                        "inicializar o sincronizar la infraestructura de base de datos en Neon."
+                    ),
+                    model_role=ModelRole.MAIN,
+                    model="neon_policy",
+                    completed=True,
+                    metadata={"kind": "neon_policy", "outcome": "owner_permission_required"},
+                )
+        except Exception:
+            pass
+
+        # 2. Regla de negocio: Prohibición de mutación directa en Neon
+        if _is_direct_neon_mutation_bypass_attempt(prompt):
+            return AiResult(
+                text=(
+                    "La base de datos en Neon es un espejo automatizado de tu diagrama UML. "
+                    "Para realizar cambios en las tablas o columnas de Neon, primero solicita la modificación en el diagrama de clases "
+                    "(por ejemplo: 'elimina la clase X' o 'agrega el atributo Y a la clase Z') y luego pide 'despliega esto en Neon' para sincronizarlos."
+                ),
+                model_role=ModelRole.MAIN,
+                model="neon_policy",
+                completed=True,
+                metadata={"kind": "neon_policy", "outcome": "direct_mutation_bypass_prevented"},
+            )
+
+        # 3. Regla de negocio: Configuración previa en Integraciones
+        if self.integration_repository is None or self.crypto_service is None:
+            return AiResult(
+                text="Para utilizar Neon en este proyecto, primero debes ingresar tu API Key desde el menú de Integraciones.",
+                model_role=ModelRole.MAIN,
+                model="neon_policy",
+                completed=True,
+                metadata={"kind": "neon_policy", "outcome": "integration_not_available"},
+            )
+
+        integration = self.integration_repository.find_by_project_and_provider(
+            project_id,
+            IntegrationProvider.NEON,
+        )
+        if integration is None or not integration.encrypted_api_key:
+            return AiResult(
+                text="Para utilizar Neon en este proyecto, primero debes ingresar tu API Key desde el menú de Integraciones.",
+                model_role=ModelRole.MAIN,
+                model="neon_policy",
+                completed=True,
+                metadata={"kind": "neon_policy", "outcome": "unconfigured_api_key"},
+            )
+
+        if not integration.is_initialized or not integration.neon_project_id:
+            return AiResult(
+                text=(
+                    "La integración con Neon aún no ha sido inicializada en este proyecto. "
+                    "Por favor, inicialízala desde el menú de Integraciones para crear el proyecto y desplegar tu diagrama inicial en Neon."
+                ),
+                model_role=ModelRole.MAIN,
+                model="neon_policy",
+                completed=True,
+                metadata={"kind": "neon_policy", "outcome": "uninitialized_project"},
+            )
+
+        return None
+
     async def _route_with_semantic_router(
         self, message: AgentMessage
     ) -> tuple[AgentContext | None, AiResult | None, AgentContinuation | None]:
@@ -718,12 +1036,13 @@ class ProcessAgentMessageUseCase:
             message.project_id,
         )
 
-        raw_exchanges = self._get_recent_exchanges(message, limit=3)
+        raw_exchanges = self._get_recent_exchanges(message, limit=8)
         recent_turns: list[dict[str, Any]] = [
             {
                 "message_id": str(ex.message_id),
                 "user": ex.user_prompt,
                 "assistant": ex.assistant_response,
+                **({"notion_tasks": list(ex.notion_tasks)} if getattr(ex, "notion_tasks", None) else {}),
                 **({"confirmed_operations": list(ex.confirmed_operations)} if getattr(ex, "confirmed_operations", None) else {}),
             }
             for ex in reversed(raw_exchanges)
@@ -737,6 +1056,13 @@ class ProcessAgentMessageUseCase:
             except Exception as exc:
                 logger.warning("No se pudieron obtener las clases existentes: %s", exc)
 
+        existing_class_attributes: dict[str, list[str]] = {}
+        if getattr(self, "class_attributes_provider", None) is not None:
+            try:
+                existing_class_attributes = self.class_attributes_provider(message.project_id) or {}
+            except Exception as exc:
+                logger.warning("No se pudieron obtener los atributos de las clases existentes: %s", exc)
+
         active_candidate: AgentContinuation | None = None
         if self.continuation_repository is not None:
             candidates = self.continuation_repository.find_active_candidates(
@@ -746,6 +1072,27 @@ class ProcessAgentMessageUseCase:
             )
             if candidates:
                 active_candidate = candidates[0]
+
+        if active_candidate is None and _is_single_notion_task_execution_request(message.prompt, recent_turns=recent_turns):
+            n_ctx, n_imm, n_cand = await self._handle_single_notion_task_execution(
+                message, recent_turns, existing_classes, existing_class_attributes
+            )
+            if n_ctx is not None or n_imm is not None:
+                return n_ctx, n_imm, n_cand
+
+        if _is_mixed_diagram_and_notion_request(message.prompt, recent_turns=recent_turns):
+            return None, AiResult(
+                text=(
+                    "He detectado que solicitas tanto modificaciones en el diagrama como acciones en Notion. "
+                    "Para mantener la coherencia y el orden en tu proyecto, estas acciones deben gestionarse por separado. "
+                    "¿Deseas que primero aplique los cambios en el lienzo o que primero gestione la tarea en Notion?"
+                ),
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+                metadata={"kind": "notion_policy", "outcome": "mixed_diagram_and_notion_rejected"},
+            ), None
+
         if not _needs_semantic_context_resolution(
             message.prompt,
             has_recent_turns=bool(recent_turns),
@@ -753,7 +1100,10 @@ class ProcessAgentMessageUseCase:
         ):
             # Acción directa autosuficiente sin contexto previo: pasa directamente al planificador
             context = self.context_builder.build(message)
-            req_mutation = classify_agent_intent(message.prompt).requires_mutation
+            req_mutation = (
+                classify_agent_intent(message.prompt).requires_mutation
+                or is_neon_sync_prompt(message.prompt)
+            )
             auth_mode = "execute" if req_mutation else "read_only"
             context = update_agent_context(
                 context,
@@ -762,6 +1112,7 @@ class ProcessAgentMessageUseCase:
                 authorized_mode=auth_mode,
                 recent_turns=recent_turns,
                 existing_classes=existing_classes,
+                existing_class_attributes=existing_class_attributes,
             )
             return context, None, None
 
@@ -769,6 +1120,7 @@ class ProcessAgentMessageUseCase:
             prompt=message.prompt,
             recent_turns=recent_turns,
             existing_classes=existing_classes,
+            existing_class_attributes=existing_class_attributes,
             active_continuation=active_candidate,
         )
 
@@ -804,7 +1156,16 @@ class ProcessAgentMessageUseCase:
             return None, ai_res, None
 
         if decision.category == SemanticCategory.NEEDS_MORE_CONTEXT:
+            active_notion_task = (
+                active_candidate.dialog_state.get("active_notion_task")
+                if active_candidate and active_candidate.dialog_state
+                else None
+            )
+            dialog_state = {"active_notion_task": active_notion_task} if active_notion_task else None
             if self.continuation_repository is not None:
+                if active_candidate is not None:
+                    closed = active_candidate.expire(reason=ContinuationCloseReason.EXPIRED)
+                    self.continuation_repository.save(closed)
                 new_cont = AgentContinuation.create(
                     id=uuid4(),
                     project_id=message.project_id,
@@ -815,6 +1176,7 @@ class ProcessAgentMessageUseCase:
                     outcome=ContinuationOutcome.AWAITING_INPUT,
                     purpose=ContinuationPurpose.CLARIFICATION,
                     missing_fields=tuple({"field": f} for f in decision.missing_info),
+                    dialog_state=dialog_state,
                 )
                 self.continuation_repository.save(new_cont)
                 self.uow.commit()
@@ -833,6 +1195,7 @@ class ProcessAgentMessageUseCase:
                     "assistant_act": "clarification_question",
                     "missing_info": decision.missing_info,
                     "reasoning": decision.reasoning,
+                    **({"active_notion_task": active_notion_task} if active_notion_task else {}),
                 },
             )
             return None, ai_res, None
@@ -847,9 +1210,35 @@ class ProcessAgentMessageUseCase:
                 authorized_mode="read_only",
                 recent_turns=recent_turns,
                 existing_classes=existing_classes,
+                existing_class_attributes=existing_class_attributes,
                 semantic_routed=True,
             )
             return context, None, None
+
+        residual_plan = None
+        if (
+            active_candidate is not None
+            and active_candidate.purpose == ContinuationPurpose.RESIDUAL_RETRY
+            and _is_explicit_retry(message.prompt)
+            and active_candidate.source_plan_message_id is not None
+        ):
+            source_msg = self.message_repository.find_by_id(active_candidate.source_plan_message_id)
+            if source_msg and source_msg.plan:
+                prior_dict = (
+                    source_msg.plan.get("prior_execution_plan")
+                    if isinstance(source_msg.plan, dict) and "prior_execution_plan" in source_msg.plan
+                    else source_msg.plan
+                )
+                add_req = _extract_retry_additional_request(message.prompt)
+                builder = ResidualPlanBuilder()
+                try:
+                    residual_plan = builder.build(
+                        prior_dict,
+                        new_goal=active_candidate.effective_request,
+                        additional_request=add_req,
+                    )
+                except Exception as exc:
+                    logger.warning("No se pudo construir el plan residual: %s", exc)
 
         claimed: AgentContinuation | None = None
         if active_candidate is not None and self.continuation_repository is not None:
@@ -870,18 +1259,214 @@ class ProcessAgentMessageUseCase:
         auth_mode = "execute" if decision.requires_mutation else "read_only"
         effective_request = decision.resolved_goal or message.prompt
         is_compound = decision.category == SemanticCategory.COMPOUND_ACTION
+        active_notion_task = (
+            active_candidate.dialog_state.get("active_notion_task")
+            if active_candidate and active_candidate.dialog_state
+            else None
+        )
         context = update_agent_context(
             context,
             effective_request=effective_request,
             prompt=effective_request,
             authorized_mode=auth_mode,
             recent_turns=recent_turns,
-             is_compound=is_compound,
+            is_compound=is_compound,
             existing_classes=existing_classes,
+            existing_class_attributes=existing_class_attributes,
             semantic_routed=True,
+            active_notion_task=active_notion_task,
+            residual_plan=residual_plan,
         )
 
         return context, None, claimed
+
+    async def _handle_single_notion_task_execution(
+        self,
+        message: AgentMessage,
+        recent_turns: list[dict[str, Any]],
+        existing_classes: dict[str, str],
+        existing_class_attributes: dict[str, list[str]] | None = None,
+    ) -> tuple[AgentContext | None, AiResult | None, AgentContinuation | None]:
+        if self.integration_repository is None or self.notion_provider is None or self.crypto_service is None:
+            return None, None, None
+
+        integration = self.integration_repository.find_by_project_and_provider(
+            message.project_id,
+            IntegrationProvider.NOTION,
+        )
+        if integration is None or not integration.encrypted_api_key:
+            return None, AiResult(
+                text="Para utilizar Notion en este proyecto, primero debes activarlo e ingresar tu API Key desde el menú de Integraciones.",
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+            ), None
+
+        if not integration.is_initialized or not integration.external_database_id:
+            return None, AiResult(
+                text="La integración con Notion aún no ha sido inicializada en este proyecto. Por favor, inicialízala desde el menú de Integraciones para comenzar a gestionar tareas.",
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+            ), None
+
+        api_key = self.crypto_service.decrypt(integration.encrypted_api_key)
+        user_name = "Colaborador"
+        if self.author_profile_reader is not None:
+            names = self.author_profile_reader.find_names({message.user_id})
+            user_name = names.get(message.user_id, "Colaborador")
+
+        tasks: list[dict[str, Any]] = []
+        cached_tasks = None
+        for turn in recent_turns:
+            if turn.get("notion_tasks"):
+                cached_tasks = turn["notion_tasks"]
+                break
+
+        if cached_tasks:
+            for ct in cached_tasks:
+                if isinstance(ct, dict) and ct.get("task_id") and ct.get("title"):
+                    tasks.append(ct)
+
+        if not tasks:
+            task_models = self.notion_provider.list_tasks(
+                api_key=api_key,
+                database_id=integration.external_database_id,
+                assignee_name=user_name,
+                status=NotionTaskStatus.PENDING,
+            )
+            tasks = [
+                {
+                    "task_id": t.task_id,
+                    "title": t.title,
+                    "description": t.description,
+                    "status": t.status.value,
+                    "priority": t.priority.value,
+                    "assignee": t.assignee_name,
+                    "due_date": t.due_date,
+                    "url": t.url,
+                }
+                for t in task_models
+            ]
+
+        if not tasks:
+            return None, AiResult(
+                text="No tienes tareas pendientes en Notion para ejecutar.",
+                model_role=ModelRole.MAIN,
+                model="notion_policy",
+                completed=True,
+            ), None
+
+        clean = message.prompt.casefold()
+        matched_task: dict[str, Any] | None = None
+
+        for ord_word, ord_idx in _ORDINAL_MAP.items():
+            if re.search(r"\b" + re.escape(ord_word) + r"\b", clean):
+                idx = ord_idx if ord_idx >= 0 else len(tasks) - 1
+                if 0 <= idx < len(tasks):
+                    matched_task = tasks[idx]
+                    break
+
+        if matched_task is None:
+            num_match = re.search(r"\b(?:tarea|número|numero|la)?\s*(\d+)\b", clean)
+            if num_match:
+                idx = int(num_match.group(1)) - 1
+                if 0 <= idx < len(tasks):
+                    matched_task = tasks[idx]
+
+        if matched_task is None:
+            quote_match = re.search(r"['\"]([^'\"]+)['\"]", message.prompt)
+            if quote_match:
+                cand_title = quote_match.group(1).casefold()
+                for t in tasks:
+                    t_title = t.get("title", "")
+                    if cand_title in t_title.casefold() or t_title.casefold() in cand_title:
+                        matched_task = t
+                        break
+
+        if matched_task is None:
+            for t in tasks:
+                t_title = t.get("title", "")
+                t_words = [w for w in t_title.casefold().split() if len(w) > 3]
+                if t_words and any(w in clean for w in t_words):
+                    matched_task = t
+                    break
+
+        if matched_task is None:
+            matched_task = tasks[0]
+
+        task_id = str(matched_task.get("task_id", ""))
+        title = str(matched_task.get("title", ""))
+        desc = str(matched_task.get("description", "") or "")
+
+        active_task = {
+            "task_id": task_id,
+            "title": title,
+            "description": desc,
+        }
+
+        task_instruction = (
+            f"{title}. {desc}".strip()
+            if desc
+            else title.strip()
+        )
+
+        if self.semantic_intent_router is not None:
+            decision = await self.semantic_intent_router.route_turn(
+                prompt=task_instruction,
+                recent_turns=(),
+                existing_classes=existing_classes,
+                existing_class_attributes=existing_class_attributes,
+                active_continuation=None,
+            )
+            if decision.category == SemanticCategory.NEEDS_MORE_CONTEXT:
+                if self.continuation_repository is not None:
+                    new_cont = AgentContinuation.create(
+                        id=uuid4(),
+                        project_id=message.project_id,
+                        user_id=message.user_id,
+                        root_message_id=message.id,
+                        source_plan_message_id=message.id,
+                        effective_request=decision.resolved_goal or task_instruction,
+                        outcome=ContinuationOutcome.AWAITING_INPUT,
+                        purpose=ContinuationPurpose.CLARIFICATION,
+                        missing_fields=tuple({"field": f} for f in decision.missing_info),
+                        dialog_state={"active_notion_task": active_task},
+                    )
+                    self.continuation_repository.save(new_cont)
+                    self.uow.commit()
+
+                return None, AiResult(
+                    text=decision.clarification_question or "¿Podrías darme más detalles para poder ejecutar esta tarea en el diagrama?",
+                    model_role=ModelRole.MAIN,
+                    model="semantic_router_clarification",
+                    completed=True,
+                    metadata={
+                        "kind": "continuation",
+                        "outcome": "awaiting_input",
+                        "assistant_act": "clarification_question",
+                        "missing_info": decision.missing_info,
+                        "active_notion_task": active_task,
+                    },
+                ), None
+
+            effective_goal = decision.resolved_goal or task_instruction
+        else:
+            effective_goal = task_instruction
+
+        context = self.context_builder.build(message)
+        context = update_agent_context(
+            context,
+            effective_request=effective_goal,
+            prompt=effective_goal,
+            authorized_mode="execute",
+            active_notion_task=active_task,
+            recent_turns=recent_turns,
+            existing_classes=existing_classes,
+            existing_class_attributes=existing_class_attributes,
+            semantic_routed=True,
+        )
+        return context, None, None
 
     async def _handle_continuation(
         self, message: AgentMessage
@@ -1053,7 +1638,7 @@ class ProcessAgentMessageUseCase:
             recent_evidence = None
             if may_reference_history and self.conversation_reader is not None:
                 builder = RecentConversationEvidenceBuilder()
-                raw_exchanges = self._get_recent_exchanges(message, limit=3)
+                raw_exchanges = self._get_recent_exchanges(message, limit=8)
                 if (
                     not candidates
                     and message.image_url is None

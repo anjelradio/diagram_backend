@@ -56,6 +56,9 @@ _FK_SUFFIX_PATTERN = re.compile(r"^.+[_\-\s]fk$", re.IGNORECASE)
 _ID_PREFIX_PATTERN = re.compile(r"^id[_\-\s]([a-z0-9_]+)$", re.IGNORECASE)
 _ID_SUFFIX_PATTERN = re.compile(r"^([a-z0-9_]+)[_\-\s]id$", re.IGNORECASE)
 
+_CAMEL_ID_PREFIX_PATTERN = re.compile(r"^id([a-z0-9_]{3,})$", re.IGNORECASE)
+_CAMEL_ID_SUFFIX_PATTERN = re.compile(r"^([a-z0-9_]{3,})id$", re.IGNORECASE)
+
 
 def is_primary_key_name(name: str | None, class_name: str | None = None) -> bool:
     """Determina si un nombre de atributo corresponde a la clave primaria de la clase.
@@ -134,6 +137,21 @@ def is_foreign_key_name(name: str | None, class_name: str | None = None) -> bool
             return False  # Es su propia PK
         return True
 
+    # Prefijo/Sufijo camelCase sin separador (ej. categoriaId, idCategoria, usuarioId)
+    prefix_camel = _CAMEL_ID_PREFIX_PATTERN.match(clean_attr)
+    if prefix_camel:
+        ref_entity = prefix_camel.group(1)
+        if class_name and _normalize_name(class_name) == ref_entity:
+            return False
+        return True
+
+    suffix_camel = _CAMEL_ID_SUFFIX_PATTERN.match(clean_attr)
+    if suffix_camel:
+        ref_entity = suffix_camel.group(1)
+        if class_name and _normalize_name(class_name) == ref_entity:
+            return False
+        return True
+
     return False
 
 
@@ -148,6 +166,7 @@ def extract_referenced_entity_from_fk(name: str | None) -> str | None:
     Ejemplos:
         `categoria_id` -> "categoria"
         `id_categoria` -> "categoria"
+        `categoriaId`  -> "categoria"
         `fk_cliente`   -> "cliente"
     """
     clean = _normalize_name(name)
@@ -166,6 +185,14 @@ def extract_referenced_entity_from_fk(name: str | None) -> str | None:
     suffix_m = _ID_SUFFIX_PATTERN.match(clean)
     if suffix_m:
         return suffix_m.group(1).strip()
+
+    prefix_c = _CAMEL_ID_PREFIX_PATTERN.match(clean)
+    if prefix_c:
+        return prefix_c.group(1).strip()
+
+    suffix_c = _CAMEL_ID_SUFFIX_PATTERN.match(clean)
+    if suffix_c:
+        return suffix_c.group(1).strip()
 
     return None
 

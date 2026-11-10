@@ -109,6 +109,7 @@ class UpdateDiagramAttributeUseCase:
                     payload_after=payload_after,
                 )
             )
+        self.access_policy.touch_project(diagram_class.project_id)
         self.uow.commit()
 
         return attribute

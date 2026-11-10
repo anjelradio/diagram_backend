@@ -186,5 +186,6 @@ class DeleteDiagramRelationUseCase:
             )
         )
         if commit_transaction:
+            self.access_policy.touch_project(relation.project_id)
             self.uow.commit()
 

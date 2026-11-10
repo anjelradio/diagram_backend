@@ -1,4 +1,4 @@
-from sqlalchemy import literal
+from sqlalchemy import column, literal
 from sqlmodel import Session, select
 
 from app.modules.collaboration.domain.enums.project_member_status import ProjectMemberStatus
@@ -29,6 +29,7 @@ class SQLModelProjectListReader(ProjectListReader):
                 ProjectModel.description,
                 ProjectModel.thumbnail_url,
                 literal(True).label("is_owner"),
+                ProjectModel.modified_date.label("modified_date"),
             )
             .where(
                 ProjectModel.owner_id == user_id,
@@ -44,6 +45,7 @@ class SQLModelProjectListReader(ProjectListReader):
                 ProjectModel.description,
                 ProjectModel.thumbnail_url,
                 literal(False).label("is_owner"),
+                ProjectModel.modified_date.label("modified_date"),
             )
             .join(ProjectMemberModel, ProjectMemberModel.project_id == ProjectModel.id)
             .where(
@@ -55,7 +57,10 @@ class SQLModelProjectListReader(ProjectListReader):
             )
         )
 
-        statement = owned_statement.union_all(shared_statement)
+        statement = (
+            owned_statement.union_all(shared_statement)
+            .order_by(column("modified_date").desc(), column("id").desc())
+        )
         rows = self.db.exec(statement).all()
 
         return [
@@ -65,6 +70,7 @@ class SQLModelProjectListReader(ProjectListReader):
                 description=row[2],
                 thumbnail_url=row[3],
                 is_owner=bool(row[4]),
+                modified_date=row[5],
             )
             for row in rows
         ]

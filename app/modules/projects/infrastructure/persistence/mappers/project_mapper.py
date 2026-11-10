@@ -13,6 +13,7 @@ class ProjectMapper:
             name=model.name,
             description=model.description,
             thumbnail_url=model.thumbnail_url,
+            thumbnail_updated_at=model.thumbnail_updated_at,
         )
 
     @staticmethod
@@ -23,6 +24,7 @@ class ProjectMapper:
             name=entity.name,
             description=entity.description,
             thumbnail_url=entity.thumbnail_url,
+            thumbnail_updated_at=entity.thumbnail_updated_at,
             deleted_date=None,
         )
 
@@ -31,4 +33,5 @@ class ProjectMapper:
         model.name = entity.name
         model.description = entity.description
         model.thumbnail_url = entity.thumbnail_url
+        model.thumbnail_updated_at = entity.thumbnail_updated_at
 

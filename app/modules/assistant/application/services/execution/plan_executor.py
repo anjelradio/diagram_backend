@@ -22,7 +22,10 @@ from app.modules.assistant.application.ports.providers.ai_provider import (
 )
 from app.modules.assistant.application.ports.agent_activity_publisher import AgentActivityCode
 from app.modules.assistant.application.services.planning.action_planner import ActionPlanner
-from app.modules.assistant.application.services.planning.agent_intent import classify_agent_intent
+from app.modules.assistant.application.services.planning.agent_intent import (
+    classify_agent_intent,
+    is_neon_sync_prompt,
+)
 from app.modules.assistant.application.services.agent_trace import current_agent_message_id
 from app.modules.assistant.application.services.planning.agent_prompts import (
     FINAL_PROMPT,
@@ -158,6 +161,38 @@ _INLINE_JSON_BLOCK_PATTERN = re.compile(
 
 def _has_pending_mutation_text(text: str) -> bool:
     return bool(_PENDING_MUTATION_PATTERN.search(text))
+
+
+def _is_task_inherently_mutative(task: dict[str, Any], objective: str) -> bool:
+    if task.get("kind") == "mutation":
+        return True
+    obj_lower = objective.lower()
+    task_id_lower = str(task.get("id", "")).lower()
+    if is_neon_sync_prompt(objective) or is_neon_sync_prompt(task_id_lower):
+        return True
+    return any(
+        kw in obj_lower or kw in task_id_lower
+        for kw in (
+            "create_notion_task",
+            "update_notion_task",
+            "delete_notion_task",
+            "sync_neon_database",
+            "apply_diagram_changes",
+            "crear tarea en notion",
+            "crear una tarea en notion",
+            "crear una nueva tarea en notion",
+            "actualizar tarea en notion",
+            "eliminar tarea en notion",
+            "sincronizar neon",
+            "sincroniza neon",
+            "sincronizar la base de datos",
+            "sincroniza la base de datos",
+            "desplegar en neon",
+            "despliega en neon",
+            "migrar a neon",
+            "migra a neon",
+        )
+    )
 
 
 def _extract_inline_mutation_tool_call(text: str) -> AiToolCall | None:
@@ -421,26 +456,49 @@ class PlanExecutor:
 
                     is_read_only = getattr(context, "authorized_mode", None) == "read_only"
                     confirmed_tool_results: list[dict[str, Any]] = []
-                    response, tool_calls_used, task_ok = await self._run_task(
-                        context=context,
-                        objective=task["objective"],
-                        requires_mutation=False if is_read_only else (task["kind"] == "mutation"),
-                        task_id=task["id"],
-                        plan=execution_plan,
-                        tool_calls_used=tool_calls_used,
-                        on_progress=on_progress,
-                        on_activity=on_activity,
-                        dependency_results=_dependency_results(
-                            execution_plan,
-                            task,
-                            confirmed_tool_results_by_task,
-                        ),
-                        confirmed_tool_results=confirmed_tool_results,
-                        include_visual_context=task.get(
-                            "needs_image", context.visual_needs_image
-                        ),
-                        tool_cache=tool_cache,
+
+                    is_notion_closure = bool(
+                        task.get("notion_task_id")
+                        or (isinstance(task.get("id"), str) and task["id"].startswith("close-notion-"))
                     )
+                    if is_notion_closure and self.tool_registry.has("update_notion_task"):
+                        notion_tid = str(task.get("notion_task_id") or task["id"].replace("close-notion-", ""))
+                        try:
+                            await self.tool_registry.execute(
+                                "update_notion_task",
+                                {"task_id": notion_tid, "status": "Done"},
+                            )
+                            response = "La tarea de Notion ha sido marcada como Done exitosamente."
+                            tool_calls_used += 1
+                            task_ok = True
+                        except Exception as exc:
+                            logger.warning("Fallo al actualizar estado de tarea Notion a Done: %s", exc)
+                            response = f"Error al actualizar tarea en Notion: {exc}"
+                            task_ok = False
+                    else:
+                        is_mut = _is_task_inherently_mutative(task, task.get("objective", ""))
+                        if is_mut and task.get("kind") != "mutation":
+                            task["kind"] = "mutation"
+                        response, tool_calls_used, task_ok = await self._run_task(
+                            context=context,
+                            objective=task["objective"],
+                            requires_mutation=False if is_read_only else is_mut,
+                            task_id=task["id"],
+                            plan=execution_plan,
+                            tool_calls_used=tool_calls_used,
+                            on_progress=on_progress,
+                            on_activity=on_activity,
+                            dependency_results=_dependency_results(
+                                execution_plan,
+                                task,
+                                confirmed_tool_results_by_task,
+                            ),
+                            confirmed_tool_results=confirmed_tool_results,
+                            include_visual_context=task.get(
+                                "needs_image", context.visual_needs_image
+                            ),
+                            tool_cache=tool_cache,
+                        )
 
                     if isinstance(response, TerminalToolFailure):
                         if response.category == DomainFailureCategory.CLASS_NOT_FOUND:
@@ -760,7 +818,15 @@ class PlanExecutor:
         tool_cache: ToolResultCache | None = None,
     ) -> tuple[str | TerminalToolFailure, int, bool]:
         task_definition = plan.get_task(task_id) or {}
-        if task_definition.get("kind") == "answer" or getattr(context, "authorized_mode", None) == "read_only":
+        is_read_only = getattr(context, "authorized_mode", None) == "read_only"
+        is_mut = _is_task_inherently_mutative(task_definition, objective)
+        if is_mut and not is_read_only and task_definition.get("kind") != "mutation":
+            task_definition["kind"] = "mutation"
+        if is_read_only:
+            requires_mutation = False
+        elif is_mut:
+            requires_mutation = True
+        elif task_definition.get("kind") == "answer":
             requires_mutation = False
 
         if self.prompt_composer is not None:
@@ -887,24 +953,65 @@ class PlanExecutor:
                         ),
                     )
                 )
+        is_notion_task = "notion" in objective.lower() or "notion" in task_id.lower() or "notion" in context.prompt.lower()
+        is_neon_task = (
+            "neon" in objective.lower()
+            or "neon" in task_id.lower()
+            or "neon" in context.prompt.lower()
+            or is_neon_sync_prompt(objective)
+            or is_neon_sync_prompt(context.prompt)
+        )
+        is_diagram_mutation = requires_mutation and not is_notion_task and not is_neon_task
+        if is_diagram_mutation:
+            mutation_directive = (
+                "\n\nINSTRUCCIÓN OBLIGATORIA DE EJECUCIÓN:\n"
+                "Esta tarea es de mutación del diagrama. Tienes estrictamente PROHIBIDO responder únicamente con texto explicativo, resúmenes o afirmar que los cambios ya se realizaron. "
+                "DEBES invocar la herramienta `apply_diagram_changes` para ejecutar las operaciones en el lienzo. "
+                "Cualquier respuesta textual que no ejecute la herramienta `apply_diagram_changes` se considerará un error."
+            )
+        elif requires_mutation and is_notion_task:
+            mutation_directive = (
+                "\n\nINSTRUCCIÓN OBLIGATORIA DE EJECUCIÓN:\n"
+                "Esta tarea es de gestión en Notion. DEBES invocar la herramienta nativa de Notion correspondiente (`create_notion_task`, `update_notion_task`, `delete_notion_task`) para aplicar la acción. "
+                "NO modifiques el diagrama ni invoques `apply_diagram_changes`."
+            )
+        elif requires_mutation and is_neon_task:
+            mutation_directive = (
+                "\n\nINSTRUCCIÓN OBLIGATORIA DE EJECUCIÓN:\n"
+                "Esta tarea es de sincronización con Neon. DEBES invocar la herramienta `sync_neon_database`. "
+                "NO modifiques el diagrama ni invoques `apply_diagram_changes`."
+            )
+        else:
+            mutation_directive = ""
         messages.append(
             AiMessage(
                 role="user",
                 content=(
                     f"Solicitud original:\n{context.prompt}\n\n"
                     f"Objetivo actual:\n{objective}"
+                    + mutation_directive
                 ),
             )
         )
         if not requires_mutation:
+            is_query_intent = any(
+                w in objective.lower() or w in context.prompt.lower()
+                for w in ("list", "listar", "dime", "mostrar", "ver", "consultar", "pendientes", "tareas")
+            ) and not is_mut
+            query_directive = (
+                "Utiliza la herramienta `list_notion_tasks` para consultar las tareas del usuario en Notion. "
+                "Proporciona la lista clara en Markdown sin tablas."
+                if (is_notion_task and is_query_intent)
+                else (
+                    "Esta tarea es exclusivamente de consulta u orientación conceptual. "
+                    "NO modifiques el diagrama ni invoques herramientas de mutación (`apply_diagram_changes`). "
+                    "Proporciona tu respuesta directamente como texto en Markdown."
+                )
+            )
             messages.append(
                 AiMessage(
                     role="user",
-                    content=(
-                        "Esta tarea es exclusivamente de consulta u orientación conceptual. "
-                        "NO modifiques el diagrama ni invoques herramientas de mutación (`apply_diagram_changes`). "
-                        "Proporciona tu respuesta directamente como texto en Markdown."
-                    ),
+                    content=query_directive,
                 )
             )
         task_definition = plan.get_task(task_id) or {}
@@ -952,7 +1059,9 @@ class PlanExecutor:
                             f"Clases conocidas previamente en el diagrama: {classes_summary}. "
                             "Si necesitas modificar o consultar alguna de estas clases, puedes "
                             "usar su ID directamente sin necesidad de llamar a "
-                            "search_diagram_elements. "
+                            "search_diagram_elements ni get_diagram_element. "
+                            "Para agregar atributos a una clase conocida, NO llames a get_diagram_element ni search_diagram_elements para verificar duplicados; "
+                            "emite directamente apply_diagram_changes, ya que el sistema valida automáticamente la existencia e ignora duplicados de forma segura. "
                             "Estado actual y exclusivo del diagrama: las únicas clases que existen actualmente en este proyecto son las listadas. "
                             "Si una clase que se mencionó en mensajes anteriores no aparece en esta lista (por ejemplo, si fue eliminada), significa que ya no existe en el diagrama. "
                             "Basa tus respuestas y operaciones exclusivamente en este estado actual."
@@ -970,10 +1079,21 @@ class PlanExecutor:
             mutation_allowed=requires_mutation,
             include_history=need_history,
         )
+        is_compound_or_continuation = bool(
+            getattr(context, "is_compound", False)
+            or getattr(context, "has_continuation", False)
+            or getattr(context, "residual_plan", None) is not None
+            or getattr(context, "active_notion_task", None) is not None
+            or (getattr(context, "recent_turns", None) and any(
+                w in context.prompt.lower()
+                for w in ("si", "sí", "adelante", "hazlo", "dale", "procede", "continua", "continúa", "ademas", "además", "tambien", "también")
+            ))
+        )
         use_execution_role = (
             bool(expected_actions)
             and requires_mutation
             and not need_history
+            and not is_compound_or_continuation
         )
         task_model_role = (
             ModelRole.EXECUTION if use_execution_role else ModelRole.MAIN
@@ -1013,16 +1133,19 @@ class PlanExecutor:
                         expected_actions, plan.operation_ledger, task_id
                     )
                     if missing:
-                        if completion_corrections < 1 and tool_calls_used < self.max_tool_calls:
+                        if completion_corrections < 2 and tool_calls_used < self.max_tool_calls:
                             completion_corrections += 1
+                            task_model_role = ModelRole.MAIN
                             messages.append(AiMessage(role="assistant", content=result.text))
                             messages.append(AiMessage(
                                 role="user",
                                 content=(
-                                    "La tarea aún no está completa. Faltan operaciones confirmadas: "
+                                    "ERROR: Has respondido con texto pero NO has ejecutado ninguna herramienta de mutación. "
+                                    "Las operaciones solicitadas NO se han aplicado aún en el lienzo. "
+                                    "Faltan operaciones obligatorias por confirmar: "
                                     + json.dumps(missing, ensure_ascii=False)
-                                    + ". Consulta el estado actual antes de aplicar solo lo pendiente. "
-                                    "NO escribas bloques JSON en el texto de respuesta; invoca directamente la herramienta nativa apply_diagram_changes."
+                                    + ". DEBES invocar la herramienta nativa `apply_diagram_changes` AHORA MISMO con estas acciones. "
+                                    "Está estrictamente PROHIBIDO responder con texto explicativo, resúmenes o afirmar que ya se hicieron: emite el tool call inmediatamente."
                                 ),
                             ))
                             continue
@@ -1033,11 +1156,12 @@ class PlanExecutor:
                         )
                 if (
                     requires_mutation
-                    and completion_corrections < 1
+                    and completion_corrections < 2
                     and tool_calls_used < self.max_tool_calls
                     and _has_pending_mutation_text(result.text or "")
                 ):
                     completion_corrections += 1
+                    task_model_role = ModelRole.MAIN
                     messages.append(AiMessage(role="assistant", content=result.text))
                     messages.append(AiMessage(
                         role="user",
@@ -1360,11 +1484,15 @@ class PlanExecutor:
                     mutation_confirmed
                     or bool(tool_result.get("mutation_applied"))
                     or tool_result.get("status") == "applied"
+                    or (call.name == "list_notion_tasks" and tool_result.get("status") == "ok")
                     or any(
                         isinstance(r, dict) and r.get("status") == "applied"
                         for r in tool_result.get("results", [])
                     )
                 )
+                if call.name == "list_notion_tasks" and tool_result.get("status") == "ok":
+                    plan.metadata["notion_tasks_snapshot"] = tool_result.get("tasks", [])
+
                 if tool_result.get("status") == "applied" and tool_result.get("operation_id"):
                     if not any(
                         entry.get("operation_id") == tool_result.get("operation_id")
@@ -1376,6 +1504,64 @@ class PlanExecutor:
                             "tool_name": call.name,
                             "status": "applied",
                             "entity_refs": tool_result.get("entity_refs", []),
+                        })
+                elif call.name in ("create_notion_task", "update_notion_task", "delete_notion_task") and tool_result.get("status") == "applied":
+                    op_id = tool_result.get("operation_id") or f"op-{call.name}-{uuid4().hex[:8]}"
+                    if not any(
+                        entry.get("operation_id") == op_id
+                        for entry in plan.operation_ledger
+                    ):
+                        raw_refs = tool_result.get("entity_refs") or []
+                        entity_refs: list[dict[str, Any]] = []
+                        for ref in raw_refs:
+                            if isinstance(ref, dict):
+                                normalized_ref = dict(ref)
+                                normalized_ref.setdefault("type", "notion_task")
+                                normalized_ref.setdefault("kind", "NOTION_TASK")
+                                normalized_ref.setdefault("id", str(normalized_ref.get("id") or op_id))
+                                entity_refs.append(normalized_ref)
+                        if not entity_refs and isinstance(tool_result.get("task"), dict):
+                            t_info = tool_result["task"]
+                            entity_refs = [{
+                                "type": "notion_task",
+                                "kind": "NOTION_TASK",
+                                "id": str(t_info.get("task_id") or op_id),
+                                "name": str(t_info.get("title") or "Tarea"),
+                            }]
+                        elif not entity_refs and tool_result.get("task_id"):
+                            entity_refs = [{
+                                "type": "notion_task",
+                                "kind": "NOTION_TASK",
+                                "id": str(tool_result["task_id"]),
+                                "name": "Tarea",
+                            }]
+                        plan.operation_ledger.append({
+                            "operation_id": op_id,
+                            "task_id": task_id,
+                            "tool_name": call.name,
+                            "action_kind": "CREATE_NOTION_TASK" if call.name == "create_notion_task" else ("UPDATE_NOTION_TASK" if call.name == "update_notion_task" else "DELETE_NOTION_TASK"),
+                            "status": "applied",
+                            "entity_refs": entity_refs,
+                        })
+                elif call.name == "sync_neon_database" and tool_result.get("status") == "applied":
+                    op_id = tool_result.get("operation_id") or f"op-neon-sync-{uuid4().hex[:8]}"
+                    if not any(
+                        entry.get("operation_id") == op_id
+                        for entry in plan.operation_ledger
+                    ):
+                        plan.operation_ledger.append({
+                            "operation_id": op_id,
+                            "task_id": task_id,
+                            "tool_name": call.name,
+                            "action_kind": "SYNC_NEON_DATABASE",
+                            "status": "applied",
+                            "message": tool_result.get("message", "Base de datos Neon sincronizada correctamente."),
+                            "entity_refs": [{
+                                "type": "neon_sync",
+                                "kind": "NEON_SYNC",
+                                "id": op_id,
+                                "name": "Base de datos Neon",
+                            }],
                         })
                 if call.name == "apply_diagram_changes" and mutation_confirmed and tool_cache is not None:
                     tool_cache.invalidate_for_mutation(call.arguments, tool_result)
@@ -1540,7 +1726,7 @@ class PlanExecutor:
                 event.get("action_kind", "unknown"),
                 event.get("status", "unknown"),
             )
-            if on_progress is not None:
+            if on_progress is not None and event.get("status") != "validated":
                 await on_progress(plan)
 
         return report
@@ -1647,7 +1833,12 @@ class PlanExecutor:
                 isinstance(t, dict) and t.get("kind") in ("answer", "query")
                 for t in plan.tasks
             )
-            if not has_answer_tasks:
+            has_suggestion_in_prompt = bool(re.search(
+                r"\b(?:sugier\w*|suger\w*|recomiend\w*|recomend\w*|qu[eé]\s+(?:atributos|campos|opciones)|opciones?)\b",
+                getattr(context, "prompt", ""),
+                re.IGNORECASE,
+            ))
+            if not has_answer_tasks and not has_suggestion_in_prompt:
                 det_text = format_deterministic_response(facts, resp_type)
                 logger.info(
                     "[Fase 6 · Síntesis] Fast-Path Determinista aplicado (0 tokens LLM, hechos=%d)",

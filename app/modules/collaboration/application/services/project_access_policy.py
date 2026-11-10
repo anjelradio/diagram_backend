@@ -84,3 +84,12 @@ class ProjectAccessPolicy:
     def ensure_read_access(self, project_id: UUID, user_id: str) -> ProjectAccessContext:
         """Valida que el usuario tenga acceso de lectura (OWNER, EDITOR o READER)."""
         return self.resolve_access(project_id, user_id)
+
+    def ensure_owner_access(self, project_id: UUID, user_id: str) -> ProjectAccessContext:
+        """Valida que el usuario sea el propietario (OWNER) del proyecto."""
+        from app.modules.projects.domain.exceptions import ProjectNotOwnedException
+
+        context = self.resolve_access(project_id, user_id)
+        if context.access_role != ProjectAccessRole.OWNER:
+            raise ProjectNotOwnedException()
+        return context

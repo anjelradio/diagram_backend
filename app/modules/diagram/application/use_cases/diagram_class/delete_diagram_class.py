@@ -106,6 +106,7 @@ class DeleteDiagramClassUseCase:
                     payload_after=None,
                 )
             )
+            self.access_policy.touch_project(existing.project_id)
             self.uow.commit()
         except Exception:
 

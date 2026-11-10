@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from app.modules.projects.application.ports.readers.project_list_reader import (
@@ -22,6 +23,7 @@ class ProjectSummaryDTO:
     description: str | None
     thumbnail_url: str | None
     is_owner: bool
+    modified_date: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +48,7 @@ class ListProjectsQueryHandler:
                 description=item.description,
                 thumbnail_url=item.thumbnail_url,
                 is_owner=item.is_owner,
+                modified_date=item.modified_date,
             )
             for item in items
         )

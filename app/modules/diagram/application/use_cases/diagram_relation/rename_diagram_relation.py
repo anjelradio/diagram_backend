@@ -82,6 +82,7 @@ class RenameDiagramRelationUseCase:
                     payload_after=payload_after,
                 )
             )
+        self.access_policy.touch_project(existing.project_id)
         self.uow.commit()
 
         return existing

@@ -341,7 +341,7 @@ class CreateDiagramRelationUseCase:
                 ),
             )
         )
+        self.access_policy.touch_project(command.project_id)
         self.uow.commit()
-
 
         return relation, True

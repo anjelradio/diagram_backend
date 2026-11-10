@@ -1,3 +1,5 @@
+from datetime import datetime
+from sqlalchemy import DateTime
 from sqlmodel import Field
 from app.shared.infrastructure.db.base_model import BaseModel
 
@@ -11,3 +13,8 @@ class ProjectModel(BaseModel, table=True):
     name: str = Field(nullable=False, max_length=255)
     description: str | None = Field(default=None, nullable=True)
     thumbnail_url: str | None = Field(default=None, nullable=True)
+    thumbnail_updated_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),
+        nullable=True,
+    )

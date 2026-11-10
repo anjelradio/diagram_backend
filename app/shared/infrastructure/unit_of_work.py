@@ -93,9 +93,13 @@ class SqlModelUnitOfWork:
                 user_id = getattr(event, "user_id", "")
                 if not user_name or user_name == user_id:
                     try:
-                        user = self.session.get(BetterAuthUser, user_id)
-                        if user and user.name:
-                            user_name = user.name
+                        with self.session.begin_nested():
+                            from sqlmodel import select
+                            user_name_found = self.session.exec(
+                                select(BetterAuthUser.name).where(BetterAuthUser.id == user_id)
+                            ).first()
+                            if user_name_found:
+                                user_name = user_name_found
                     except Exception:
                         pass
                 if not user_name:

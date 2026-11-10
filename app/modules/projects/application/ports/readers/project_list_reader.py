@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 
@@ -12,6 +13,7 @@ class ProjectListItem:
     description: str | None
     thumbnail_url: str | None
     is_owner: bool
+    modified_date: datetime
 
 
 class ProjectListReader(ABC):

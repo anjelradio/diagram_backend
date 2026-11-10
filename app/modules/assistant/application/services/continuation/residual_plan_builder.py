@@ -121,15 +121,21 @@ class ResidualPlanBuilder:
             residual_tasks.append(res_task)
 
         if additional_request:
-            mutation_ids = [task["id"] for task in residual_tasks if task["kind"] == "mutation"]
+            mutation_ids = [
+                task["id"]
+                for task in residual_tasks
+                if task["kind"] == "mutation"
+                and not (task.get("notion_task_id") or task["id"].startswith("close-notion-"))
+            ]
             task_kind = "mutation" if requires_mutation(additional_request) else "answer"
             task_id = "additional-request"
             while any(task["id"] == task_id for task in plan.tasks):
                 task_id += "-new"
             if task_kind == "mutation":
                 for task in residual_tasks:
-                    if task["kind"] == "answer":
-                        task["depends_on"].append(task_id)
+                    if task["kind"] == "answer" or task.get("notion_task_id") or task["id"].startswith("close-notion-"):
+                        if task_id not in task["depends_on"]:
+                            task["depends_on"].append(task_id)
             residual_tasks.append({
                 "id": task_id,
                 "objective": additional_request,
@@ -139,6 +145,12 @@ class ResidualPlanBuilder:
 
         if not residual_tasks:
             return None
+
+        # Reordenar para que las mutaciones ordinarias vayan primero, luego cierre de Notion y luego respuestas
+        closure_tasks = [t for t in residual_tasks if t.get("notion_task_id") or t["id"].startswith("close-notion-")]
+        other_mutations = [t for t in residual_tasks if t["kind"] == "mutation" and t not in closure_tasks]
+        answer_tasks = [t for t in residual_tasks if t["kind"] == "answer"]
+        residual_tasks = [*other_mutations, *closure_tasks, *answer_tasks]
 
         # 5. Mantener en el ledger únicamente las operaciones aplicadas confirmadas
         confirmed_ledger = [

@@ -116,5 +116,6 @@ class DeleteDiagramAttributeUseCase:
                 payload_after=None,
             )
         )
+        self.access_policy.touch_project(diagram_class.project_id)
         self.uow.commit()
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +37,7 @@ class ProjectItemResponse(BaseModel):
     description: str | None = Field(default=None, description="Descripción opcional del proyecto")
     thumbnail_url: str | None = Field(default=None, description="URL opcional de miniatura del proyecto")
     is_owner: bool = Field(description="Indica si el usuario autenticado es el propietario")
+    modified_date: datetime = Field(description="Fecha y hora de última modificación (UTC)")
 
 
 class ProjectListResponse(BaseModel):
@@ -61,4 +63,20 @@ class UpdateProjectRequest(BaseModel):
     description: str | None = Field(
         default=None,
         description="Nueva descripción para el proyecto",
+    )
+
+
+class ProjectThumbnailResponse(BaseModel):
+    """Respuesta tras procesar la miniatura del proyecto."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    project_id: UUID = Field(description="Identificador único del proyecto")
+    thumbnail_url: str | None = Field(default=None, description="URL pública de la miniatura")
+    thumbnail_updated_at: datetime | None = Field(
+        default=None,
+        description="Fecha de última actualización de la miniatura (UTC)",
+    )
+    updated: bool = Field(
+        description="Indica si la imagen fue subida a Cloudinary o si se omitió por el cooldown de 5 minutos",
     )

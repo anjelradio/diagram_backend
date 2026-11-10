@@ -90,10 +90,48 @@ def test_list_projects_own_and_shared(client, session: Session):
 
     assert "Proyecto Propio" in item_names
     assert item_names["Proyecto Propio"]["is_owner"] is True
+    assert "modified_date" in item_names["Proyecto Propio"]
 
     assert "Proyecto Compartido Activo" in item_names
     assert item_names["Proyecto Compartido Activo"]["is_owner"] is False
+    assert "modified_date" in item_names["Proyecto Compartido Activo"]
 
     assert "Proyecto Eliminado" not in item_names
     assert "Proyecto Compartido Removido" not in item_names
     assert "Proyecto Compartido Baneado" not in item_names
+
+
+def test_list_projects_order_by_modified_date_desc(client, session: Session):
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+
+    p_old = ProjectModel(
+        id=uuid.uuid4(),
+        owner_id="user_test_1",
+        name="Proyecto Antiguo",
+        modified_date=now - timedelta(days=5),
+    )
+    p_recent = ProjectModel(
+        id=uuid.uuid4(),
+        owner_id="user_test_1",
+        name="Proyecto Reciente",
+        modified_date=now - timedelta(minutes=10),
+    )
+    p_newest = ProjectModel(
+        id=uuid.uuid4(),
+        owner_id="user_test_1",
+        name="Proyecto Mas Nuevo",
+        modified_date=now,
+    )
+
+    session.add_all([p_old, p_recent, p_newest])
+    session.commit()
+
+    response = client.get("/api/projects")
+    assert response.status_code == 200
+    items = response.json()["items"]
+
+    assert len(items) >= 3
+    names = [i["name"] for i in items[:3]]
+    assert names == ["Proyecto Mas Nuevo", "Proyecto Reciente", "Proyecto Antiguo"]
+

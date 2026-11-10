@@ -122,9 +122,41 @@ _PK_INTENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_SINGLE_ATTR_PATTERN = re.compile(
+    r"\b(?:crea(?:r)?|agrega(?:r)?|a[ñn]ade(?:r)?|inserta(?:r)?|haz|pon(?:er)?)\s+"
+    r"(?:(?:un|el|la)\s+)?(?:(?:atributo|campo|propiedad|columna)\s+)?"
+    r"[`'\"]?([a-zA-Z0-9_]+)[`'\"]?",
+    re.IGNORECASE,
+)
+
+
+def _extract_single_attribute_candidate(prompt: str) -> str | None:
+    """Extrae el nombre de un atributo si el prompt pide crear o agregar un único atributo."""
+    clean = prompt.strip()
+    match = _SINGLE_ATTR_PATTERN.search(clean)
+    if not match:
+        return None
+    cand = match.group(1).strip()
+    stop_words = {
+        "una", "un", "el", "la", "clase", "tabla", "nodo", "nuevo", "nueva",
+        "relacion", "relación", "asociacion", "asociación", "conexion", "conexión",
+    }
+    if cand.casefold() in stop_words:
+        return None
+    # Si hay listas de múltiples atributos separados por comas o 'y', no es aislado
+    remainder = clean[match.end():]
+    if re.search(r"^\s*,\s*\w+", remainder) or re.search(r"^\s+y\s+(?:el\s+)?(?:atributo\s+)?\w+", remainder, re.IGNORECASE):
+        return None
+    return cand
+
 
 def extract_class_hints_from_key_request(prompt: str) -> tuple[str | None, str | None]:
     """Extrae la clase sobre la que se pide la llave y la posible clase relacionada."""
+    from app.modules.assistant.domain.dialog.key_attribute_rules import (
+        extract_referenced_entity_from_fk,
+        is_foreign_key_name,
+    )
+
     clean = prompt.strip()
     target_match = re.search(
         r"\b(?:en|a|sobre|para)\s+(?:la\s+clase\s+|el\s+nodo\s+|la\s+tabla\s+)?`?([^\W\d]\w*)`?",
@@ -149,29 +181,58 @@ def extract_class_hints_from_key_request(prompt: str) -> tuple[str | None, str |
         if cand.casefold() not in stop_words:
             related_class = cand
 
+    if related_class is None:
+        cand_attr = _extract_single_attribute_candidate(clean)
+        if cand_attr and is_foreign_key_name(cand_attr, target_class):
+            ref = extract_referenced_entity_from_fk(cand_attr)
+            if ref:
+                related_class = ref.capitalize()
+
     return target_class, related_class
 
 
 def is_isolated_fk_request(prompt: str) -> bool:
     """Detecta si el mensaje pide explícitamente crear una llave foránea aislada."""
+    from app.modules.assistant.domain.dialog.key_attribute_rules import is_foreign_key_name
+
     clean = prompt.strip()
     norm = normalize_text(clean)
-    if not _FK_INTENT_PATTERN.search(clean):
-        return False
     if re.search(r"\bcrea(?:r)?\s+(?:una\s+)?clase\b", norm):
         return False
-    return True
+
+    if _FK_INTENT_PATTERN.search(clean):
+        return True
+
+    # Detectar también peticiones que piden crear un atributo con nombre de FK
+    cand_attr = _extract_single_attribute_candidate(clean)
+    if cand_attr:
+        target_cls, _ = extract_class_hints_from_key_request(clean)
+        if is_foreign_key_name(cand_attr, target_cls):
+            return True
+
+    return False
 
 
 def is_isolated_pk_request(prompt: str) -> bool:
     """Detecta si el mensaje pide explícitamente crear una llave primaria aislada."""
+    from app.modules.assistant.domain.dialog.key_attribute_rules import is_primary_key_name
+
     clean = prompt.strip()
     norm = normalize_text(clean)
-    if not _PK_INTENT_PATTERN.search(clean):
-        return False
     if re.search(r"\bcrea(?:r)?\s+(?:una\s+)?clase\b", norm):
         return False
-    return True
+
+    if _PK_INTENT_PATTERN.search(clean):
+        return True
+
+    # Detectar también peticiones que piden crear un atributo con nombre de PK (id, uuid, etc.)
+    cand_attr = _extract_single_attribute_candidate(clean)
+    if cand_attr:
+        target_cls, _ = extract_class_hints_from_key_request(clean)
+        if is_primary_key_name(cand_attr, target_cls):
+            return True
+
+    return False
 
 
 def extract_turn_signals(user_prompt: str) -> TurnSignals:

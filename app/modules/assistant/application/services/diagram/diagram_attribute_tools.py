@@ -103,6 +103,9 @@ class DiagramAttributeTools:
             project_member_repository=member_repository,
             project_access_policy=access,
         ).for_agent()
+        self._write_access_checked = False
+        self._class_model_cache: dict[UUID, DiagramClassModel] = {}
+        self._class_attributes_cache: dict[UUID, list[DiagramAttribute]] = {}
 
     async def apply(self, action: dict[str, Any], report: ProgressReporter | None) -> dict[str, Any]:
         kind = action["kind"]
@@ -117,6 +120,8 @@ class DiagramAttributeTools:
         raise ValueError("Acción de atributo no admitida")
 
     def _ensure_class_scope(self, class_id: UUID) -> DiagramClassModel:
+        if class_id in self._class_model_cache:
+            return self._class_model_cache[class_id]
         model = self.session.exec(
             select(DiagramClassModel).where(
                 DiagramClassModel.id == class_id,
@@ -126,6 +131,7 @@ class DiagramAttributeTools:
         ).first()
         if model is None:
             raise DiagramClassNotFoundException()
+        self._class_model_cache[class_id] = model
         return model
 
     def _ensure_attribute_scope(self, attribute_id: UUID) -> DiagramAttributeModel:
@@ -144,7 +150,9 @@ class DiagramAttributeTools:
         return row[0]
 
     async def _create(self, action: dict[str, Any], report: ProgressReporter | None) -> dict[str, Any]:
-        self.access_policy.ensure_write_access(self.project_id, self.user_id)
+        if not self._write_access_checked:
+            self.access_policy.ensure_write_access(self.project_id, self.user_id)
+            self._write_access_checked = True
         class_id = UUID(action["class_id"])
         class_model = self._ensure_class_scope(class_id)
         if self.reservation_emitter is not None:
@@ -152,7 +160,11 @@ class DiagramAttributeTools:
                 class_id, AgentReservationActivityType.EDIT
             )
         attribute_id = uuid4()
-        attributes = self.attribute_repository.list_by_class_id(class_id)
+        if class_id in self._class_attributes_cache:
+            attributes = self._class_attributes_cache[class_id]
+        else:
+            attributes = self.attribute_repository.list_by_class_id(class_id)
+            self._class_attributes_cache[class_id] = list(attributes)
         requested_name = action["name"].strip().casefold()
         existing_matches = [
             attribute
@@ -206,7 +218,11 @@ class DiagramAttributeTools:
             await _report(report, action, status="applied", entity_refs=[], derived_effects=effects)
             return {"status": "applied", "entity_refs": [], "derived_effects": effects}
 
-        position = action.get("position", len(attributes))
+        raw_pos = action.get("position")
+        if isinstance(raw_pos, int) and raw_pos >= 1:
+            position = min(raw_pos, len(attributes))
+        else:
+            position = len(attributes)
         await _report(
             report,
             action,
@@ -226,9 +242,9 @@ class DiagramAttributeTools:
                 name=action["name"],
                 position=position,
                 data_type=(
-                    DiagramAttributeDataType(action["data_type"])
+                    DiagramAttributeDataType.from_raw(action["data_type"])
                     if action.get("data_type") is not None
-                    else DiagramAttributeDataType(infer_attribute_type(action.get("name")))
+                    else DiagramAttributeDataType.from_raw(infer_attribute_type(action.get("name")))
                 ),
                 is_nullable=(
                     action["nullable"]
@@ -238,6 +254,8 @@ class DiagramAttributeTools:
                 event_sender_id="assistant",
             )
         )
+        if class_id in self._class_attributes_cache:
+            self._class_attributes_cache[class_id].append(attribute)
         refs = [{"type": "attribute", "id": str(attribute.id)}]
         await _report(report, action, status="applied", entity_refs=refs)
         return {"status": "applied", "entity_refs": refs}
@@ -269,7 +287,7 @@ class DiagramAttributeTools:
                 user_id=self.user_id,
                 name=action.get("name", UNSET),
                 data_type=(
-                    DiagramAttributeDataType(action["data_type"])
+                    DiagramAttributeDataType.from_raw(action["data_type"])
                     if "data_type" in action and action["data_type"] is not None
                     else None
                     if "data_type" in action
@@ -279,6 +297,7 @@ class DiagramAttributeTools:
                 event_sender_id="assistant",
             )
         )
+        self._class_attributes_cache.pop(attribute_model.class_id, None)
         refs = [{"type": "attribute", "id": str(attribute.id)}]
         await _report(report, action, status="applied", entity_refs=refs)
         return {"status": "applied", "entity_refs": refs}
@@ -312,6 +331,7 @@ class DiagramAttributeTools:
                 event_sender_id="assistant",
             )
         )
+        self._class_attributes_cache.pop(attribute_model.class_id, None)
         refs = [{"type": "attribute", "id": str(attribute_id)}]
         await _report(report, action, status="applied", entity_refs=refs)
         return {"status": "applied", "entity_refs": refs}
@@ -344,6 +364,7 @@ class DiagramAttributeTools:
                 event_sender_id="assistant",
             )
         )
+        self._class_attributes_cache.pop(attribute_model.class_id, None)
         refs = [{"type": "attribute", "id": str(attribute_id)}]
         await _report(report, action, status="applied", entity_refs=refs)
         return {"status": "applied", "entity_refs": refs}

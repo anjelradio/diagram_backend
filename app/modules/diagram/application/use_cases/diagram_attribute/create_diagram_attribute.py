@@ -143,7 +143,7 @@ class CreateDiagramAttributeUseCase:
                 payload_after=serialize_attribute(new_attr, class_name=diagram_class.name),
             )
         )
+        self.access_policy.touch_project(diagram_class.project_id)
         self.uow.commit()
-
 
         return new_attr, True

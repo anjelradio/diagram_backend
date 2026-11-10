@@ -27,3 +27,6 @@ from app.modules.diagram.infrastructure.persistence.models.diagram_audit_log_mod
 from app.modules.assistant.infrastructure.persistence.models.agent_message_model import AgentMessageModel
 from app.modules.assistant.infrastructure.persistence.models.agent_continuation_model import AgentContinuationModel
 
+# Módulo Integrations
+from app.modules.integrations.infrastructure.persistence.models.project_integration_model import ProjectIntegrationModel
+

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any
 from uuid import UUID
@@ -66,6 +67,8 @@ from app.shared.domain.exceptions import (
     NotFoundException,
 )
 from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+
+logger = logging.getLogger(__name__)
 
 
 class DiagramMutationTools:
@@ -382,7 +385,26 @@ class DiagramMutationTools:
                 if term_failure is not None:
                     result["terminal_failure"] = term_failure
                 await _report_failure(action_report, action, result)
-            except Exception:
+            except (ValueError, TypeError, KeyError) as exc:
+                logger.warning(
+                    "Argumentos inválidos en acción de diagrama '%s': %s",
+                    action.get("kind"),
+                    exc,
+                )
+                result = {
+                    "operation_id": action["operation_id"],
+                    "status": "rejected",
+                    "entity_refs": [],
+                    "derived_effects": [],
+                    "error_code": type(exc).__name__,
+                }
+                await _report_failure(action_report, action, result)
+            except Exception as exc:
+                logger.exception(
+                    "Error inesperado al aplicar mutación de diagrama '%s': %s",
+                    action.get("kind"),
+                    exc,
+                )
                 # Un problema de commit puede ocurrir después de que la BD lo haya
                 # confirmado. Detenemos el lote y no disparamos un reintento ciego.
                 result = {

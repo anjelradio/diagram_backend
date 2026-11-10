@@ -15,6 +15,9 @@ from app.modules.assistant.application.ports.providers.ai_provider import (
     ModelRole,
 )
 from app.modules.assistant.application.services.planning.action_planner import ActionPlanner
+from app.modules.assistant.application.services.planning.agent_intent import (
+    is_neon_sync_prompt,
+)
 from app.modules.assistant.application.ports.agent_activity_publisher import AgentActivityCode
 from app.modules.assistant.application.services.planning.agent_prompts import IMAGE_PROMPT
 from app.modules.assistant.application.services.context_builder import AgentContext
@@ -106,10 +109,11 @@ class AgentOrchestrator:
         )
 
         is_read_only = getattr(effective_context, "authorized_mode", None) == "read_only"
+        is_neon_sync = is_neon_sync_prompt(effective_prompt)
         if context.image_url is None and self.plan_executor is not None:
             if getattr(effective_context, "residual_plan", None) is not None:
                 plan = effective_context.residual_plan
-            elif is_read_only:
+            elif is_read_only and not is_neon_sync:
                 plan = ActionPlanner.build_direct_plan(
                     effective_prompt,
                     kind="answer",
@@ -126,20 +130,36 @@ class AgentOrchestrator:
                     effective_prompt,
                     on_activity,
                     existing_classes=getattr(effective_context, "existing_classes", None),
+                    active_notion_task=getattr(effective_context, "active_notion_task", None),
                 )
                 if plan is None:
-                    direct_kind = "mutation" if getattr(effective_context, "authorized_mode", None) == "execute" else None
+                    direct_kind = "mutation" if (
+                        getattr(effective_context, "authorized_mode", None) == "execute"
+                        or ActionPlanner.requires_mutation(effective_prompt)
+                        or is_neon_sync
+                    ) else None
                     plan = ActionPlanner.build_direct_plan(
                         effective_prompt,
                         kind=direct_kind,
                         needs_image=context.visual_needs_image,
                     )
             else:
-                direct_kind = "mutation" if getattr(effective_context, "authorized_mode", None) == "execute" else None
+                direct_kind = "mutation" if (
+                    getattr(effective_context, "authorized_mode", None) == "execute"
+                    or ActionPlanner.requires_mutation(effective_prompt)
+                    or is_neon_sync
+                ) else None
                 plan = ActionPlanner.build_direct_plan(
                     effective_prompt,
                     kind=direct_kind,
                     needs_image=context.visual_needs_image,
+                )
+            active_notion_task = getattr(effective_context, "active_notion_task", None)
+            if active_notion_task and "task_id" in active_notion_task and plan is not None:
+                plan = ActionPlanner.attach_notion_task_closure(
+                    plan,
+                    notion_task_id=active_notion_task["task_id"],
+                    notion_task_title=active_notion_task.get("title", "Tarea"),
                 )
             if on_progress is not None and plan is not None:
                 await on_progress(plan)
@@ -398,6 +418,7 @@ class AgentOrchestrator:
         *,
         visual_context: str | None = None,
         existing_classes: Any | None = None,
+        active_notion_task: dict[str, Any] | None = None,
     ) -> ExecutionPlan | None:
         if self.action_planner is None:
             return None
@@ -409,6 +430,13 @@ class AgentOrchestrator:
                 sig = inspect.signature(self.action_planner.create_plan)
                 if "existing_classes" in sig.parameters:
                     kwargs["existing_classes"] = existing_classes
+            except (TypeError, ValueError):
+                pass
+        if active_notion_task:
+            try:
+                sig = inspect.signature(self.action_planner.create_plan)
+                if "active_notion_task" in sig.parameters:
+                    kwargs["active_notion_task"] = active_notion_task
             except (TypeError, ValueError):
                 pass
         return await self.action_planner.create_plan(prompt, **kwargs)

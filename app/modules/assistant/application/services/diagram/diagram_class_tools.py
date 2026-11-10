@@ -229,9 +229,9 @@ class DiagramClassTools:
                     else:
                         attr_id = uuid4()
                         data_type = (
-                            DiagramAttributeDataType(attr_spec["data_type"])
+                            DiagramAttributeDataType.from_raw(attr_spec["data_type"])
                             if attr_spec.get("data_type") is not None
-                            else DiagramAttributeDataType(infer_attribute_type(attr_name))
+                            else DiagramAttributeDataType.from_raw(infer_attribute_type(attr_name))
                         )
                         created_attr, _ = attr_use_case.execute(
                             CreateDiagramAttributeCommand(
@@ -349,9 +349,9 @@ class DiagramClassTools:
                     continue
                 attr_id = uuid4()
                 data_type = (
-                    DiagramAttributeDataType(attr_spec["data_type"])
+                    DiagramAttributeDataType.from_raw(attr_spec["data_type"])
                     if attr_spec.get("data_type") is not None
-                    else DiagramAttributeDataType(infer_attribute_type(attr_name))
+                    else DiagramAttributeDataType.from_raw(infer_attribute_type(attr_name))
                 )
                 created_attr, _ = attr_use_case.execute(
                     CreateDiagramAttributeCommand(

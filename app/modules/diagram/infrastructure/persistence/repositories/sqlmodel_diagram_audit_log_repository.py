@@ -34,9 +34,12 @@ class SQLModelDiagramAuditLogRepository(DiagramAuditLogRepository):
             # Intentar enriquecer user_name si viene vacío o igual al ID
             if not new_model.user_name or new_model.user_name == new_model.user_id:
                 try:
-                    user = self.session.get(BetterAuthUser, new_model.user_id)
-                    if user and user.name:
-                        new_model.user_name = user.name
+                    with self.session.begin_nested():
+                        row = self.session.exec(
+                            select(BetterAuthUser.name).where(BetterAuthUser.id == new_model.user_id)
+                        ).first()
+                        if row:
+                            new_model.user_name = row
                 except Exception:
                     pass
             self.session.add(new_model)

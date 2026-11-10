@@ -1,5 +1,5 @@
 from uuid import UUID
-from fastapi import APIRouter, File, Response, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 
 from app.core.dependencies import CurrentUser, DBSession, UoWDep
 from app.modules.collaboration.application.services.project_access_policy import (
@@ -48,12 +48,19 @@ from app.modules.projects.application.use_cases.project.update_project import (
     UpdateProjectCommand,
     UpdateProjectUseCase,
 )
+from app.modules.projects.application.use_cases.project.update_project_thumbnail import (
+    UpdateProjectThumbnailUseCase,
+)
 from app.modules.projects.infrastructure.api.schemas.project_schemas import (
     ProjectCreatedResponse,
     ProjectDetailResponse,
     ProjectItemResponse,
     ProjectListResponse,
+    ProjectThumbnailResponse,
     UpdateProjectRequest,
+)
+from app.modules.projects.infrastructure.external.cloudinary_project_image_provider import (
+    CloudinaryProjectImageProvider,
 )
 from app.modules.projects.infrastructure.persistence.readers.sqlmodel_project_list_reader import (
     SQLModelProjectListReader,
@@ -141,6 +148,7 @@ def list_projects(
                 description=item.description,
                 thumbnail_url=item.thumbnail_url,
                 is_owner=item.is_owner,
+                modified_date=item.modified_date,
             )
             for item in dto.items
         ]
@@ -273,6 +281,62 @@ def export_project(
         headers={
             "Content-Disposition": f'attachment; filename="{result.file_name}"',
         },
+    )
+
+
+@router.post(
+    "/{project_id}/thumbnail",
+    response_model=ProjectThumbnailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Subir y actualizar la miniatura del proyecto",
+)
+async def update_project_thumbnail(
+    project_id: UUID,
+    current_user: CurrentUser,
+    db: DBSession,
+    uow: UoWDep,
+    file: UploadFile = File(...),
+) -> ProjectThumbnailResponse:
+    """Actualiza la miniatura de un proyecto con una captura enviada desde el cliente web.
+
+    Aplica una ventana de cooldown de 5 minutos: si la miniatura ya fue actualizada
+    hace menos de 5 minutos, la subida a Cloudinary se omite y se retorna el estado
+    actual sin error.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El archivo de imagen no puede estar vacío.",
+        )
+
+    project_repo = SQLModelProjectRepository(db)
+    member_repo = SQLModelProjectMemberRepository(db)
+    access_policy = ProjectAccessPolicy(
+        project_repository=project_repo,
+        project_member_repository=member_repo,
+    )
+    storage_provider = CloudinaryProjectImageProvider()
+    diagram_class_repo = SQLModelDiagramClassRepository(db)
+    use_case = UpdateProjectThumbnailUseCase(
+        project_repository=project_repo,
+        image_storage_provider=storage_provider,
+        access_checker=access_policy,
+        diagram_class_repository=diagram_class_repo,
+        uow=uow,
+    )
+
+    result = await use_case.execute(
+        project_id=project_id,
+        user_id=current_user.user_id,
+        image_data=image_bytes,
+    )
+
+    return ProjectThumbnailResponse(
+        project_id=result["project_id"],
+        thumbnail_url=result["thumbnail_url"],
+        thumbnail_updated_at=result["thumbnail_updated_at"],
+        updated=result["updated"],
     )
 
 

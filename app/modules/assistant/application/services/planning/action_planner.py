@@ -17,6 +17,7 @@ from app.modules.assistant.application.ports.providers.ai_provider import (
 )
 from app.modules.assistant.application.services.planning.agent_intent import (
     classify_agent_intent,
+    is_neon_sync_prompt,
     requires_mutation as intent_requires_mutation,
     requires_plan as intent_requires_plan,
 )
@@ -56,6 +57,8 @@ class ActionPlanner:
         "CREATE_CLASS", "RENAME_CLASS", "DELETE_CLASS", "CREATE_ATTRIBUTE",
         "UPDATE_ATTRIBUTE", "REPOSITION_ATTRIBUTE", "DELETE_ATTRIBUTE",
         "CREATE_RELATION", "RENAME_RELATION", "DELETE_RELATION",
+        "CREATE_NOTION_TASK", "UPDATE_NOTION_TASK", "DELETE_NOTION_TASK",
+        "SYNC_NEON_DATABASE",
     })
 
     def __init__(
@@ -78,6 +81,43 @@ class ActionPlanner:
             raise ValueError("El presupuesto de salida del plan debe ser positivo.")
 
     @classmethod
+    def attach_notion_task_closure(
+        cls,
+        plan: ExecutionPlan,
+        notion_task_id: str,
+        notion_task_title: str = "Tarea",
+    ) -> ExecutionPlan:
+        """Agrega automáticamente la tarea final dependiente para marcar la tarea de Notion como Done."""
+        closure_id = f"close-notion-{notion_task_id}"
+        if any(t.get("id") == closure_id for t in plan.tasks):
+            return plan
+
+        mutation_tasks = [t for t in plan.tasks if t.get("kind", "mutation") == "mutation"]
+        answer_tasks = [t for t in plan.tasks if t.get("kind", "mutation") == "answer"]
+
+        closure_dependencies = [t["id"] for t in mutation_tasks] if mutation_tasks else [t["id"] for t in plan.tasks]
+
+        closure_task: dict[str, Any] = {
+            "id": closure_id,
+            "objective": f"Marcar la tarea '{notion_task_title}' como Done en Notion",
+            "kind": "mutation",
+            "depends_on": closure_dependencies,
+            "status": "pending",
+            "operation_ids": [],
+            "result_refs": [],
+            "notion_task_id": notion_task_id,
+        }
+
+        for answer_task in answer_tasks:
+            deps = answer_task.get("depends_on", [])
+            if closure_id not in deps:
+                answer_task["depends_on"] = [*deps, closure_id]
+
+        plan.tasks = [*mutation_tasks, closure_task, *answer_tasks]
+        plan.validate()
+        return plan
+
+    @classmethod
     def build_direct_plan(
         cls,
         prompt: str,
@@ -85,10 +125,11 @@ class ActionPlanner:
         kind: str | None = None,
         needs_image: bool = False,
         max_tool_calls: int | None = None,
+        active_notion_task: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         """Crea un ExecutionPlan homogéneo para una solicitud directa de un solo paso."""
-        task_kind = kind or ("mutation" if cls.requires_mutation(prompt) else "answer")
-        return ExecutionPlan.create(
+        task_kind = kind or ("mutation" if (cls.requires_mutation(prompt) or is_neon_sync_prompt(prompt)) else "answer")
+        plan = ExecutionPlan.create(
             goal=prompt.strip(),
             tasks=[
                 {
@@ -101,6 +142,13 @@ class ActionPlanner:
             ],
             limits={"max_tool_calls": max_tool_calls} if max_tool_calls else {},
         )
+        if active_notion_task and "task_id" in active_notion_task:
+            plan = cls.attach_notion_task_closure(
+                plan,
+                notion_task_id=active_notion_task["task_id"],
+                notion_task_title=active_notion_task.get("title", "Tarea"),
+            )
+        return plan
 
     @staticmethod
     def requires_plan(prompt: str) -> bool:
@@ -116,6 +164,7 @@ class ActionPlanner:
         *,
         visual_context: str | None = None,
         existing_classes: Sequence[str] | dict[str, Any] | None = None,
+        active_notion_task: dict[str, Any] | None = None,
     ) -> ExecutionPlan | None:
         if not self.requires_plan(prompt):
             return None
@@ -186,12 +235,39 @@ class ActionPlanner:
                 or task.get("kind", "mutation") not in {"mutation", "answer"}
             ):
                 raise InvalidExecutionPlanException(reason=ExecutionPlanErrorReason.PLANNER_INVALID_TASK)
+            raw_kind = task.get("kind", "mutation")
+            task_obj = task["objective"].strip()
+            task_id_str = str(task.get("id", "")).lower()
+            is_mut = (
+                raw_kind == "mutation"
+                or is_neon_sync_prompt(task_obj)
+                or is_neon_sync_prompt(task_id_str)
+                or any(
+                    kw in task_obj.lower() or kw in task_id_str
+                    for kw in (
+                        "create_notion_task",
+                        "update_notion_task",
+                        "delete_notion_task",
+                        "sync_neon_database",
+                        "apply_diagram_changes",
+                        "crear tarea en notion",
+                        "crear una tarea en notion",
+                        "crear una nueva tarea en notion",
+                        "actualizar tarea en notion",
+                        "eliminar tarea en notion",
+                        "sincronizar neon",
+                        "sincroniza neon",
+                        "sincronizar la base de datos",
+                        "sincroniza la base de datos",
+                    )
+                )
+            )
             normalized_task = {
                 "id": _normalize_task_reference(
                     task.get("id", f"task-{index + 1}")
                 ),
-                "objective": task["objective"].strip(),
-                "kind": task.get("kind", "mutation"),
+                "objective": task_obj,
+                "kind": "mutation" if is_mut else "answer",
                 "depends_on": _normalize_task_dependencies(
                     task.get("depends_on", [])
                 ),
@@ -264,11 +340,18 @@ class ActionPlanner:
                 dict.fromkeys([*dependencies, *(task["id"] for task in mutation_tasks)])
             )
         tasks = [*mutation_tasks, *answer_tasks]
-        return ExecutionPlan.create(
+        plan = ExecutionPlan.create(
             goal=goal,
             tasks=tasks,
             limits={"max_tasks": self.max_tasks},
         )
+        if active_notion_task and "task_id" in active_notion_task:
+            plan = self.attach_notion_task_closure(
+                plan,
+                notion_task_id=active_notion_task["task_id"],
+                notion_task_title=active_notion_task.get("title", "Tarea"),
+            )
+        return plan
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

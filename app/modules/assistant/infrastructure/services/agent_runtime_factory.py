@@ -2,7 +2,7 @@ from uuid import UUID
 import asyncio
 from uuid import uuid4
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.core.dependencies import get_event_bus
@@ -40,6 +40,15 @@ from app.modules.assistant.application.services.intent import SemanticIntentRout
 from app.modules.assistant.application.use_cases.process_agent_message import (
     ProcessAgentMessageUseCase,
 )
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_attribute_repository import (
+    SQLModelDiagramAttributeRepository,
+)
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_class_repository import (
+    SQLModelDiagramClassRepository,
+)
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_relation_repository import (
+    SQLModelDiagramRelationRepository,
+)
 from app.modules.assistant.infrastructure.external.qwen_ai_provider import QwenAiProvider
 from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_continuation_repository import (
     SQLModelAgentContinuationRepository,
@@ -55,6 +64,27 @@ from app.modules.assistant.infrastructure.persistence.readers.sqlmodel_agent_aut
 )
 from app.modules.assistant.infrastructure.persistence.readers.sqlmodel_agent_conversation_reader import (
     SQLModelAgentConversationReader,
+)
+from app.modules.assistant.application.services.integrations.neon_agent_tools import (
+    NeonAgentTools,
+)
+from app.modules.assistant.application.services.integrations.notion_agent_tools import (
+    NotionAgentTools,
+)
+from app.modules.integrations.application.services.integration_crypto_service import (
+    IntegrationCryptoService,
+)
+from app.modules.integrations.application.use_cases.sync_neon_database import (
+    SyncNeonDatabaseUseCase,
+)
+from app.modules.integrations.infrastructure.external.neon_mcp_provider import (
+    NeonMcpProvider,
+)
+from app.modules.integrations.infrastructure.external.notion_mcp_provider import (
+    NotionMcpProvider,
+)
+from app.modules.integrations.infrastructure.persistence.repositories.sqlmodel_project_integration_repository import (
+    SQLModelProjectIntegrationRepository,
 )
 from app.modules.assistant.application.services.diagram.agent_reservation_emitter import (
     AgentReservationEmitter,
@@ -82,6 +112,12 @@ from app.modules.diagram.application.services.diagram_access_policy import (
 )
 from app.modules.diagram.infrastructure.persistence.readers.sqlmodel_agent_diagram_reader import (
     SQLModelAgentDiagramReader,
+)
+from app.modules.diagram.infrastructure.persistence.models.diagram_class_model import (
+    DiagramClassModel,
+)
+from app.modules.diagram.infrastructure.persistence.models.diagram_attribute_model import (
+    DiagramAttributeModel,
 )
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (
     SQLModelProjectRepository,
@@ -152,6 +188,41 @@ def build_process_agent_message_use_case(
         user_id=user_id,
         reservation_emitter=reservation_emitter,
     ).register(tool_registry)
+    author_profile_reader = SQLModelAgentAuthorNameReader(session)
+    user_names = author_profile_reader.find_names({user_id})
+    current_user_name = user_names.get(user_id, "Colaborador")
+
+    integration_repo = SQLModelProjectIntegrationRepository(session)
+    crypto_service = IntegrationCryptoService()
+    notion_provider = NotionMcpProvider()
+    NotionAgentTools(
+        project_id=project_id,
+        current_user_name=current_user_name,
+        integration_repository=integration_repo,
+        crypto_service=crypto_service,
+        notion_provider=notion_provider,
+    ).register(tool_registry)
+
+    class_repo = SQLModelDiagramClassRepository(session)
+    attr_repo = SQLModelDiagramAttributeRepository(session)
+    rel_repo = SQLModelDiagramRelationRepository(session)
+    sync_neon_use_case = SyncNeonDatabaseUseCase(
+        access_policy=access_policy,
+        integration_repository=integration_repo,
+        project_repository=project_repository,
+        class_repository=class_repo,
+        attribute_repository=attr_repo,
+        relation_repository=rel_repo,
+        crypto_service=crypto_service,
+        neon_provider=NeonMcpProvider(),
+        uow=uow,
+    )
+    NeonAgentTools(
+        project_id=project_id,
+        user_id=user_id,
+        sync_neon_use_case=sync_neon_use_case,
+    ).register(tool_registry)
+
     AgentConversationTools(
         conversation_reader=conversation_reader,
         access_policy=access_policy,
@@ -167,6 +238,33 @@ def build_process_agent_message_use_case(
             item.name: str(item.id)
             for item in res.items
             if item.element_type == "class" and item.name and item.id
+        }
+
+    def _provide_class_attributes(proj_id: UUID) -> dict[str, list[str]]:
+        classes = session.exec(
+            select(DiagramClassModel)
+            .where(
+                DiagramClassModel.project_id == proj_id,
+                DiagramClassModel.deleted_date.is_(None),
+            )
+            .order_by(DiagramClassModel.name.asc())
+        ).all()
+        class_ids = [c.id for c in classes]
+        attrs_by_class: dict[UUID, list[str]] = {}
+        if class_ids:
+            attrs = session.exec(
+                select(DiagramAttributeModel)
+                .where(
+                    DiagramAttributeModel.class_id.in_(class_ids),
+                    DiagramAttributeModel.deleted_date.is_(None),
+                )
+                .order_by(DiagramAttributeModel.position.asc())
+            ).all()
+            for a in attrs:
+                attrs_by_class.setdefault(a.class_id, []).append(a.name)
+        return {
+            c.name: attrs_by_class.get(c.id, [])
+            for c in classes
         }
 
     prompt_composer = PromptComposer(variant=getattr(settings, "AGENT_PROMPT_VARIANT", "legacy"))
@@ -197,11 +295,15 @@ def build_process_agent_message_use_case(
         dialog_manager=dialog_manager,
         semantic_intent_router=semantic_intent_router,
         class_provider=_provide_classes,
+        class_attributes_provider=_provide_class_attributes,
         project_access_policy=access_policy,
         context_builder=ContextBuilder(
             token_estimator=token_estimator,
             max_memory_tokens=settings.AGENT_MEMORY_MAX_TOKENS,
         ),
+        integration_repository=integration_repo,
+        notion_provider=notion_provider,
+        crypto_service=crypto_service,
         orchestrator=AgentOrchestrator(
             provider,
             None,
@@ -227,7 +329,7 @@ def build_process_agent_message_use_case(
         uow=uow,
         completion_publisher=WebSocketAgentCompletionPublisher(),
         activity_reporter=activity_reporter.report,
-        author_profile_reader=SQLModelAgentAuthorNameReader(session),
+        author_profile_reader=author_profile_reader,
         memory_updater=None,
     )
 

@@ -5,6 +5,7 @@ from app.modules.projects.domain.entities.project import Project
 from app.modules.projects.domain.repositories.project_repository import ProjectRepository
 from app.modules.projects.infrastructure.persistence.mappers.project_mapper import ProjectMapper
 from app.modules.projects.infrastructure.persistence.models.project_model import ProjectModel
+from app.shared.infrastructure.db.base_model import utc_now
 
 
 class SQLModelProjectRepository(ProjectRepository):
@@ -39,5 +40,15 @@ class SQLModelProjectRepository(ProjectRepository):
         record = self.db.exec(statement).first()
         if record is not None:
             record.soft_delete()
+            self.db.add(record)
+
+    def touch(self, project_id: UUID) -> None:
+        statement = select(ProjectModel).where(
+            ProjectModel.id == project_id,
+            ProjectModel.deleted_date.is_(None),
+        )
+        record = self.db.exec(statement).first()
+        if record is not None:
+            record.modified_date = utc_now()
             self.db.add(record)
 

@@ -40,6 +40,12 @@ from app.modules.assistant.infrastructure.services.agent_job_runner import Agent
 from app.modules.code_generation.infrastructure.api.routers.code_generation_router import (
     router as code_generation_router,
 )
+from app.modules.integrations.infrastructure.api.routers.neon_integration_router import (
+    router as neon_integration_router,
+)
+from app.modules.integrations.infrastructure.api.routers.notion_integration_router import (
+    router as notion_integration_router,
+)
 from app.modules.diagram.infrastructure.realtime.broadcast_handler import (
     configure_broadcast_loop,
 )
@@ -161,3 +167,5 @@ app.include_router(diagram_router, prefix="/api")
 app.include_router(diagram_ws_router, prefix="/api")
 app.include_router(assistant_router, prefix="/api")
 app.include_router(code_generation_router, prefix="/api")
+app.include_router(notion_integration_router, prefix="/api")
+app.include_router(neon_integration_router, prefix="/api")

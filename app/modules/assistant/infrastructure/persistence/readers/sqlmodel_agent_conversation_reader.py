@@ -346,6 +346,12 @@ class SQLModelAgentConversationReader(AgentConversationReader):
                 proposal for proposal in raw_proposals[:20]
                 if isinstance(proposal, dict)
             ) if isinstance(raw_proposals, list) else ()
+            raw_notion_tasks = None
+            if isinstance(r.plan, dict):
+                raw_notion_tasks = r.plan.get("notion_tasks_snapshot") or r.plan.get("metadata", {}).get("notion_tasks_snapshot")
+            notion_tasks = tuple(
+                t for t in raw_notion_tasks if isinstance(t, dict)
+            ) if isinstance(raw_notion_tasks, (list, tuple)) else ()
             exchanges.append(
                 RecentExchange(
                     message_id=r.id,
@@ -359,6 +365,7 @@ class SQLModelAgentConversationReader(AgentConversationReader):
                     assistant_act=_extract_assistant_act(r),
                     is_superseded=is_sup,
                     proposals=proposals,
+                    notion_tasks=notion_tasks,
                 )
             )
         return exchanges

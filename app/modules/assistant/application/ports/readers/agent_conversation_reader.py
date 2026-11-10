@@ -62,6 +62,7 @@ class RecentExchange:
     assistant_act: str | None = None
     is_superseded: bool = False
     proposals: tuple[dict[str, Any], ...] = ()
+    notion_tasks: tuple[dict[str, Any], ...] = ()
 
 
 class AgentConversationReader(ABC):

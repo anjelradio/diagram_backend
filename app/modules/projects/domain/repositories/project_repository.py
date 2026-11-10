@@ -22,3 +22,8 @@ class ProjectRepository(ABC):
         """Elimina un proyecto por su identificador único."""
         raise NotImplementedError
 
+    @abstractmethod
+    def touch(self, project_id: UUID) -> None:
+        """Actualiza la fecha de modificación (modified_date) del proyecto al instante actual."""
+        raise NotImplementedError
+

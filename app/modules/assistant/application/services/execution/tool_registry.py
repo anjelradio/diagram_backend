@@ -70,6 +70,9 @@ class ToolRegistry:
             raise ValueError("El nombre de herramienta está vacío o duplicado.")
         self._tools[name] = tool
 
+    def has(self, name: str) -> bool:
+        return name in self._tools
+
     @property
     def definitions(self) -> tuple[AiToolDefinition, ...]:
         return tuple(tool.definition for tool in self._tools.values())
@@ -132,9 +135,7 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise UnknownAgentToolException()
-        if tool.mutating and visual_scope is not None:
-            if tool.visual_scope_validator is None:
-                raise AgentToolArgumentsException()
+        if tool.mutating and visual_scope is not None and tool.visual_scope_validator is not None:
             tool.visual_scope_validator(arguments, visual_scope)
         if not isinstance(arguments, dict):
             raise AgentToolArgumentsException()

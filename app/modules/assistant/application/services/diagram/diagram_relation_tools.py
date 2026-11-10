@@ -184,6 +184,14 @@ class DiagramRelationTools:
             )
         source_cardinality = _cardinality(action.get("source_cardinality"))
         target_cardinality = _cardinality(action.get("target_cardinality"))
+        if relation_type is DiagramRelationType.ASSOCIATION:
+            if source_cardinality is None and target_cardinality is None:
+                source_cardinality = DiagramCardinality.ZERO_OR_MORE
+                target_cardinality = DiagramCardinality.EXACTLY_ONE
+            elif source_cardinality is None:
+                source_cardinality = DiagramCardinality.ZERO_OR_MORE
+            elif target_cardinality is None:
+                target_cardinality = DiagramCardinality.EXACTLY_ONE
         raw_name = action.get("name")
         name = (
             raw_name.strip()
@@ -582,7 +590,21 @@ class DiagramRelationTools:
 
 
 def _cardinality(value: str | None) -> DiagramCardinality | None:
-    return DiagramCardinality(value) if value is not None else None
+    if value is None:
+        return None
+    val_str = str(value).strip()
+    if val_str in ("1..1", "1:1", "one", "uno"):
+        return DiagramCardinality.EXACTLY_ONE
+    if val_str in ("0..1", "0:1"):
+        return DiagramCardinality.ZERO_OR_ONE
+    if val_str in ("0..*", "0:*", "*", "N", "many", "muchos"):
+        return DiagramCardinality.ZERO_OR_MORE
+    if val_str in ("1..*", "1:*", "1..N"):
+        return DiagramCardinality.ONE_OR_MORE
+    try:
+        return DiagramCardinality(val_str)
+    except ValueError:
+        return None
 
 
 def _snake_name(name: str) -> str:

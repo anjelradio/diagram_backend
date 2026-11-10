@@ -28,6 +28,7 @@ class ExecutionPlan:
     version: int = PLAN_VERSION
     operation_ledger: list[dict[str, Any]] = field(default_factory=list)
     limits: dict[str, int] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _now())
     updated_at: str = field(default_factory=lambda: _now())
 
@@ -63,6 +64,7 @@ class ExecutionPlan:
                 tasks=[dict(item) for item in value["tasks"]],
                 operation_ledger=[dict(item) for item in value["operation_ledger"]],
                 limits=dict(value["limits"]),
+                metadata=dict(value.get("metadata") or {}),
                 created_at=value["created_at"],
                 updated_at=value["updated_at"],
             )
@@ -330,7 +332,7 @@ class ExecutionPlan:
     def to_dict(self) -> dict[str, Any]:
         self.updated_at = _now()
         self.validate()
-        return {
+        result: dict[str, Any] = {
             "version": self.version,
             "goal": self.goal,
             "status": self.status,
@@ -340,6 +342,9 @@ class ExecutionPlan:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        if self.metadata:
+            result["metadata"] = self.metadata
+        return result
 
 
 def _now() -> str:

@@ -64,6 +64,10 @@ class DiagramAccessPolicy:
         ctx = self.project_access_policy.ensure_read_access(project_id, user_id)
         return ctx.project
 
+    def touch_project(self, project_id: UUID) -> None:
+        """Actualiza la fecha de modificación del proyecto contenedor."""
+        self.project_access_policy.project_repository.touch(project_id)
+
     def ensure_write_access(
         self,
         project_id: UUID,

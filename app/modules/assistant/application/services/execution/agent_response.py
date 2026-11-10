@@ -145,6 +145,10 @@ def _extract_clean_name(ref: dict[str, Any], task: dict[str, Any] | None) -> str
     if task:
         obj = str(task.get("objective", ""))
         cleaned = _UUID_PATTERN.sub("", obj).strip()
+        # Si contiene nombre entre comillas (ej. 'Tarea' o "Tarea")
+        quote_match = re.search(r"['\"]([^'\"]+)['\"]", cleaned)
+        if quote_match and len(quote_match.group(1).strip()) > 1:
+            return quote_match.group(1).strip()
         # Si el objetivo expresa una relación entre dos entidades (ej. "entre Factura y DetalleFactura")
         rel_match = re.search(
             r"entre\s+(?:la\s+clase\s+)?([A-Za-z0-9_]+)\s+y\s+(?:la\s+clase\s+)?([A-Za-z0-9_]+)",
@@ -161,7 +165,7 @@ def _extract_clean_name(ref: dict[str, Any], task: dict[str, Any] | None) -> str
         end_match = re.search(r"\b([A-Za-z0-9_]+)[.\s]*$", cleaned)
         if end_match and len(end_match.group(1)) > 1:
             word = end_match.group(1)
-            if word.lower() not in {"creada", "creado", "modificada", "modificado", "eliminada", "eliminado", "diagrama", "proyecto"}:
+            if word.lower() not in {"creada", "creado", "modificada", "modificado", "eliminada", "eliminado", "diagrama", "proyecto", "notion", "tarea", "tareas", "done", "pendiente"}:
                 return word
 
     ref_id = ref.get("id")
@@ -214,25 +218,47 @@ def extract_communicable_facts(
 
         if not refs:
             ent_name = _extract_clean_name({}, task)
-            ent_type = "clase" if task and "clase" in str(task.get("objective", "")).lower() else "elemento"
+            is_neon_entry = "NEON" in kind or (task and "neon" in str(task.get("objective", "")).lower())
+            if is_neon_entry:
+                ent_type = "neon_sync"
+                ent_name = "Base de datos Neon"
+                action = "updated"
+                details = str(entry.get("message") or "Base de datos Neon sincronizada correctamente.")
+                facts.append(
+                    CommunicableFact(
+                        result_type="confirmed_change",
+                        entity_type=ent_type,
+                        entity_name=ent_name,
+                        action=action,
+                        details=details,
+                    )
+                )
+                continue
+            is_notion_entry = "NOTION" in kind or (task and ("notion" in str(task.get("objective", "")).lower() or task.get("notion_task_id")))
+            ent_type = "notion_task" if is_notion_entry else ("clase" if task and "clase" in str(task.get("objective", "")).lower() else "elemento")
             action = "created"
             if "UPDATE" in kind or "RENAME" in kind:
                 action = "updated"
             elif "DELETE" in kind:
                 action = "deleted"
+            details = f"{ent_type.capitalize()} {ent_name} {action}."
+            if is_notion_entry and (task and str(task.get("id", "")).startswith("close-notion-")):
+                details = f"Tarea de Notion '{ent_name}' marcada como Done."
             facts.append(
                 CommunicableFact(
                     result_type="confirmed_change",
                     entity_type=ent_type,
                     entity_name=ent_name,
                     action=action,
-                    details=f"{ent_type.capitalize()} {ent_name} {action}.",
+                    details=details,
                 )
             )
             continue
 
         for ref in refs:
             ent_type = ref.get("type", "entity")
+            if ref.get("kind") == "NOTION_TASK" or "NOTION" in kind:
+                ent_type = "notion_task"
             ref_id = str(ref.get("id") or "")
             # Omitir atributos que son efectos secundarios de relaciones o creación interna de clase sin nombre explícito
             if ent_type in {"attribute", "atributo"} and (
@@ -253,13 +279,17 @@ def extract_communicable_facts(
             elif "DELETE" in kind:
                 action = "deleted"
 
+            details = f"{ent_type.capitalize()} {ent_name} {action}."
+            if ent_type == "notion_task" and (task and str(task.get("id", "")).startswith("close-notion-")):
+                details = f"Tarea de Notion '{ent_name}' marcada como Done."
+
             facts.append(
                 CommunicableFact(
                     result_type="confirmed_change",
                     entity_type=ent_type,
                     entity_name=ent_name,
                     action=action,
-                    details=f"{ent_type.capitalize()} {ent_name} {action}.",
+                    details=details,
                 )
             )
 
@@ -271,18 +301,25 @@ def extract_communicable_facts(
                 handled_task_ids.add(task_id)
                 obj = str(task.get("objective", ""))
                 ent_name = _extract_clean_name({}, task)
+                is_notion_task = bool(task.get("notion_task_id") or task_id.startswith("close-notion-") or "notion" in obj.lower())
                 action = "created"
-                if any(w in obj.lower() for w in ("modifica", "actualiza", "renombra", "edita")):
+                if any(w in obj.lower() for w in ("modifica", "actualiza", "renombra", "edita", "done", "marcar")):
                     action = "updated"
                 elif any(w in obj.lower() for w in ("elimina", "borra", "quita")):
                     action = "deleted"
+
+                ent_type = "notion_task" if is_notion_task else ("clase" if "clase" in obj.lower() else "elemento")
+                details = f"Completado: {obj}"
+                if task_id.startswith("close-notion-"):
+                    details = f"Tarea de Notion '{ent_name}' marcada como Done."
+
                 facts.append(
                     CommunicableFact(
                         result_type="confirmed_change",
-                        entity_type="clase" if "clase" in obj.lower() else "elemento",
+                        entity_type=ent_type,
                         entity_name=ent_name,
                         action=action,
-                        details=f"Completado: {obj}",
+                        details=details,
                     )
                 )
 
@@ -380,6 +417,20 @@ def format_deterministic_response(facts: list[CommunicableFact], response_type: 
         return "Por favor proporciona más detalles para aclarar la solicitud antes de continuar."
 
     def _format_item(f: CommunicableFact) -> str:
+        if f.entity_type in {"neon_sync", "neon_database", "neon"}:
+            return f"- {f.details}"
+
+        if f.entity_type in {"notion_task", "tarea_notion", "tarea de notion"}:
+            if f.action == "created":
+                return f"- Se creó la tarea de Notion **{f.entity_name}**."
+            if f.action == "updated":
+                if "done" in f.details.lower():
+                    return f"- Se marcó la tarea de Notion **{f.entity_name}** como Done."
+                return f"- Se actualizó la tarea de Notion **{f.entity_name}**."
+            if f.action == "deleted":
+                return f"- Se eliminó la tarea de Notion **{f.entity_name}**."
+            return f"- Tarea de Notion **{f.entity_name}**: {f.action}."
+
         ent_type_str = "clase" if f.entity_type in {"class", "clase"} else "atributo" if f.entity_type in {"attribute", "atributo"} else "relación" if f.entity_type in {"relation", "relación"} else "elemento"
         if f.action == "created":
             participle = "creada" if ent_type_str in {"clase", "relación"} else "creado"
@@ -517,6 +568,9 @@ def format_plan_execution_response(plan: Any) -> str:
                     )
 
     def _format_item(f: CommunicableFact) -> str:
+        if f.entity_type in {"neon_sync", "neon_database", "neon"}:
+            return f"- {f.details}"
+
         ent_type_str = (
             "clase"
             if f.entity_type in {"class", "clase"}

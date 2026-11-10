@@ -265,11 +265,17 @@ def _validate_action_fields(action: dict[str, Any]) -> None:
         raise AgentToolArgumentsException()
     if kind == "UPDATE_ATTRIBUTE" and not {"name", "data_type", "nullable"} & action.keys():
         raise AgentToolArgumentsException()
-    if kind == "CREATE_ATTRIBUTE" and not _valid_data_type(action.get("data_type")):
-        raise AgentToolArgumentsException()
-    if kind == "UPDATE_ATTRIBUTE":
-        if "data_type" in action and not _valid_data_type(action["data_type"]):
+    if kind == "CREATE_ATTRIBUTE":
+        if not _valid_data_type(action.get("data_type")):
             raise AgentToolArgumentsException()
+        if action.get("data_type") is not None:
+            action["data_type"] = DiagramAttributeDataType.from_raw(action["data_type"]).value
+    if kind == "UPDATE_ATTRIBUTE":
+        if "data_type" in action:
+            if not _valid_data_type(action["data_type"]):
+                raise AgentToolArgumentsException()
+            if action["data_type"] is not None:
+                action["data_type"] = DiagramAttributeDataType.from_raw(action["data_type"]).value
         if "nullable" in action and not isinstance(action["nullable"], bool):
             raise AgentToolArgumentsException()
     if kind == "CREATE_ATTRIBUTE" and "nullable" in action and not isinstance(action["nullable"], bool):
@@ -282,9 +288,11 @@ def _validate_action_fields(action: dict[str, Any]) -> None:
         if key in action:
             _uuid(action[key])
     if kind == "CREATE_RELATION":
-        if not isinstance(action["relation_type"], str) or action["relation_type"] not in {
-            item.value for item in DiagramRelationType
-        }:
+        if not isinstance(action.get("relation_type"), str):
+            raise AgentToolArgumentsException()
+        try:
+            action["relation_type"] = DiagramRelationType.from_raw(action["relation_type"]).value
+        except (ValueError, KeyError, TypeError):
             raise AgentToolArgumentsException()
         for key in ("source_handle", "target_handle"):
             if key in action and (
@@ -364,8 +372,11 @@ def _validate_create_class_attributes(attributes: Any) -> None:
             raise AgentToolArgumentsException()
         if "name" not in attr or not _valid_name(attr["name"]):
             raise AgentToolArgumentsException()
-        if "data_type" in attr and not _valid_data_type(attr["data_type"]):
-            raise AgentToolArgumentsException()
+        if "data_type" in attr:
+            if not _valid_data_type(attr["data_type"]):
+                raise AgentToolArgumentsException()
+            if attr["data_type"] is not None:
+                attr["data_type"] = DiagramAttributeDataType.from_raw(attr["data_type"]).value
         if "nullable" in attr and not isinstance(attr["nullable"], bool):
             raise AgentToolArgumentsException()
 

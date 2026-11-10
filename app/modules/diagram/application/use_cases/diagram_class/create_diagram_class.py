@@ -140,7 +140,7 @@ class CreateDiagramClassUseCase:
                 payload_after=serialize_class(diagram_class, attributes=[pk]),
             )
         )
+        self.access_policy.touch_project(command.project_id)
         self.uow.commit()
-
 
         return diagram_class, [pk], True

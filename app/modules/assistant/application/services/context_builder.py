@@ -43,7 +43,9 @@ class AgentContext:
     authorized_mode: str | None = None
     is_compound: bool = False
     existing_classes: dict[str, str] | None = None
+    existing_class_attributes: dict[str, list[str]] | None = None
     semantic_routed: bool = False
+    active_notion_task: dict[str, Any] | None = None
 
 
 def update_agent_context(context: Any, **changes: Any) -> Any:

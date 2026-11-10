@@ -1,4 +1,6 @@
-from pydantic import Field, field_validator
+from urllib.parse import urlparse
+
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -90,51 +92,90 @@ class Settings(BaseSettings):
             return [o.strip() for o in value.split(",") if o.strip()]
         return value  # type: ignore[return-value]
 
-    # ── Asistente IA (Gemini) ─────────────────────────────────────────────────
-    GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
-    GEMINI_MODEL_CHAIN: list[str] | str = Field(
-        default_factory=lambda: [
-            "gemini-3.1-flash-lite",
-            "gemini-3.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-3-flash-preview",
-            "gemini-3.5-flash",
-            "gemini-3.6-flash",
-            "gemini-3.7-flash",
-            "gemini-3.8-flash",
-        ],
-        env="GEMINI_MODEL_CHAIN",
-    )
-    GEMINI_MAX_RETRY_CYCLES: int = Field(
-        default=1, ge=1, env="GEMINI_MAX_RETRY_CYCLES"
-    )
-    GEMINI_REQUEST_TIMEOUT_SECONDS: float = Field(
-        default=25.0, ge=1.0, env="GEMINI_REQUEST_TIMEOUT_SECONDS"
-    )
-
-    @field_validator("GEMINI_MODEL_CHAIN", mode="after")
-    @classmethod
-    def parse_gemini_models(cls, value: object) -> list[str]:
-        if isinstance(value, str):
-            raw_models = [m.strip() for m in value.split(",") if m.strip()]
-        elif isinstance(value, (list, tuple)):
-            raw_models = [str(m).strip() for m in value if str(m).strip()]
-        else:
-            raw_models = []
-
-        normalized: list[str] = []
-        for m in raw_models:
-            norm = m.lower().replace(" ", "-")
-            norm = norm.replace("flash-light", "flash-lite").replace("flashlight", "flash-lite")
-            if norm in ("gemini-3-flash", "3-flash"):
-                norm = "gemini-3-flash-preview"
-            normalized.append(norm)
-        return normalized
-
     # ── Cloudinary (Almacenamiento de imágenes) ────────────────────────────────
     CLOUDINARY_CLOUD_NAME: str = Field(default="", env="CLOUDINARY_CLOUD_NAME")
     CLOUDINARY_API_KEY: str = Field(default="", env="CLOUDINARY_API_KEY")
     CLOUDINARY_API_SECRET: str = Field(default="", env="CLOUDINARY_API_SECRET")
+    CLOUDINARY_TIMEOUT_SECONDS: int = Field(
+        default=30, ge=1, env="CLOUDINARY_TIMEOUT_SECONDS"
+    )
+
+    # ── Asistente: Qwen Model Studio ──────────────────────────────────────────
+    # La clave puede omitirse en servicios que no ejecutan inferencia; el
+    # adaptador valida su presencia al recibir una solicitud del asistente.
+    QWEN_API_KEY: SecretStr = Field(default=SecretStr(""), repr=False)
+    QWEN_BASE_URL: str = Field(
+        default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    )
+    QWEN_MODEL_MAIN: str = Field(default="qwen3.7-plus", min_length=1)
+    QWEN_MODEL_VISION: str = Field(default="qwen3-vl-plus", min_length=1)
+    QWEN_MODEL_PLANNING: str = Field(default="qwen3.7-plus", min_length=1)
+    QWEN_MODEL_EXECUTION: str = Field(default="qwen3.8-flash", min_length=1)
+    QWEN_MODEL_COMPACTION: str = Field(default="qwen3.8-flash", min_length=1)
+    QWEN_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0, le=180)
+    QWEN_DEBUG_LOG_CONTENT: bool = Field(default=False)
+    AGENT_CONTEXT_MAX_TOKENS: int = Field(default=20_000, ge=8_000, le=100_000)
+    AGENT_MEMORY_MAX_TOKENS: int = Field(default=7000, gt=0, le=100_000)
+    AGENT_PLANNING_MAX_OUTPUT_TOKENS: int = Field(default=6_000, ge=512, le=32_000)
+    AGENT_TASK_MAX_OUTPUT_TOKENS: int = Field(default=2_000, ge=256, le=16_000)
+    AGENT_FINAL_MAX_OUTPUT_TOKENS: int = Field(default=700, ge=128, le=4_096)
+    AGENT_MAX_PLAN_TASKS: int = Field(default=20, gt=0, le=50)
+    AGENT_MAX_DIAGRAM_ACTIONS: int = Field(default=30, gt=0, le=100)
+    AGENT_MAX_TOOL_CALLS: int = Field(default=20, gt=0, le=100)
+    AGENT_MAX_TOOL_ARGUMENTS_CHARS: int = Field(default=12_000, gt=0, le=100_000)
+    AGENT_MAX_TOOL_RESULT_CHARS: int = Field(default=16_000, ge=512, le=100_000)
+    AGENT_MAX_ELEMENT_DETAIL_ITEMS: int = Field(default=20, gt=0, le=100)
+    AGENT_MAX_EXECUTION_SECONDS: int = Field(default=240, gt=0, le=1800)
+    AGENT_PROMPT_VARIANT: str = Field(default="legacy")
+    AGENT_DIALOG_MANAGER_ENABLED: bool = Field(default=True)
+    AGENT_DIALOG_RECENT_TURNS: int = Field(default=6, ge=1, le=20)
+    AGENT_FAST_SYNTHESIS_ENABLED: bool = Field(default=True)
+
+    @field_validator("AGENT_PROMPT_VARIANT")
+    @classmethod
+    def validate_agent_prompt_variant(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"legacy", "modular"}:
+            raise ValueError("AGENT_PROMPT_VARIANT debe ser 'legacy' o 'modular'.")
+        return normalized
+
+    @field_validator("QWEN_BASE_URL")
+    @classmethod
+    def validate_qwen_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlparse(normalized)
+        try:
+            hostname = parsed.hostname
+            _port = parsed.port
+        except ValueError as exc:
+            raise ValueError("QWEN_BASE_URL debe ser una URL HTTPS válida.") from exc
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("QWEN_BASE_URL debe ser una URL HTTPS válida.")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_agent_token_budgets(self):
+        if self.AGENT_MEMORY_MAX_TOKENS >= self.AGENT_CONTEXT_MAX_TOKENS:
+            raise ValueError(
+                "AGENT_MEMORY_MAX_TOKENS debe ser menor que AGENT_CONTEXT_MAX_TOKENS."
+            )
+        for field_name in (
+            "AGENT_PLANNING_MAX_OUTPUT_TOKENS",
+            "AGENT_TASK_MAX_OUTPUT_TOKENS",
+            "AGENT_FINAL_MAX_OUTPUT_TOKENS",
+        ):
+            if getattr(self, field_name) >= self.AGENT_CONTEXT_MAX_TOKENS:
+                raise ValueError(
+                    f"{field_name} debe ser menor que AGENT_CONTEXT_MAX_TOKENS."
+                )
+        return self
 
     @property
     def database_url_normalized(self) -> str:

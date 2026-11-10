@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "description": "Corpus sintético, legible y etiquetado, renderizado desde las fuentes SVG contiguas.",
+  "cases": [
+    {
+      "id": "catalog-one-to-many",
+      "image": "catalog.png",
+      "diagram_kind": "ERD",
+      "classes": ["Category", "Product"],
+      "attributes": {"Category.name": "TEXT", "Category.is_active": "BOOLEAN", "Category.created_at": "TIMESTAMP", "Product.name": "TEXT", "Product.price": "DECIMAL", "Product.available": "BOOLEAN"},
+      "relations": [{"source": "Category", "target": "Product", "relation_type": "ASSOCIATION", "source_cardinality": "1", "target_cardinality": "0..*"}]
+    },
+    {
+      "id": "school-many-to-many",
+      "image": "school.png",
+      "diagram_kind": "ERD",
+      "classes": ["Student", "Course"],
+      "attributes": {"Student.first_name": "TEXT", "Student.email": "TEXT", "Student.enrolled_on": "DATE", "Course.title": "TEXT", "Course.credits": "INTEGER", "Course.starts_at": "TIMESTAMP"},
+      "relations": [{"source": "Student", "target": "Course", "relation_type": "ASSOCIATION", "source_cardinality": "0..*", "target_cardinality": "0..*"}]
+    },
+    {
+      "id": "billing-one-to-one-optional",
+      "image": "billing.png",
+      "diagram_kind": "ERD",
+      "classes": ["Customer", "BillingProfile"],
+      "attributes": {"Customer.full_name": "TEXT", "Customer.email": "TEXT", "Customer.registered_on": "DATE", "BillingProfile.tax_number": "TEXT", "BillingProfile.company_name": "TEXT", "BillingProfile.verified": "BOOLEAN"},
+      "relations": [{"source": "Customer", "target": "BillingProfile", "relation_type": "ASSOCIATION", "source_cardinality": "1", "target_cardinality": "0..1"}]
+    },
+    {
+      "id": "order-composition-one-to-many",
+      "image": "orders.png",
+      "diagram_kind": "UML_CLASS",
+      "classes": ["PurchaseOrder", "OrderLine"],
+      "attributes": {"PurchaseOrder.placed_at": "TIMESTAMP", "PurchaseOrder.status": "TEXT", "PurchaseOrder.total": "DECIMAL", "OrderLine.quantity": "INTEGER", "OrderLine.unit_price": "DECIMAL", "OrderLine.note": "TEXT"},
+      "relations": [{"source": "PurchaseOrder", "target": "OrderLine", "relation_type": "COMPOSITION", "source_cardinality": "1", "target_cardinality": "1..*"}]
+    }
+  ]
+}

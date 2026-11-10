@@ -49,12 +49,13 @@ class ConnectionManager:
             
             peers.append(session)
 
+        room.check_expired_reservations()
         await session.websocket.send_json(
             {
                 "type": "presence_snapshot",
                 "peers": list(seen_users.values()),
                 "class_locks": room.serialize_locks(),
-                "agent_lock": room.agent_lock,
+                "agent_component_reservations": room.serialize_reservations(),
             }
         )
         if is_first_session:
@@ -77,7 +78,8 @@ class ConnectionManager:
                 released = room.release_user_locks(session.user_id)
             if not self.sessions[session.project_id]:
                 self.sessions.pop(session.project_id, None)
-                self.rooms.pop(session.project_id, None)
+                if room is not None and not room.has_active_reservations():
+                    self.rooms.pop(session.project_id, None)
 
         for lock in released:
             await self.broadcast(
@@ -111,6 +113,124 @@ class ConnectionManager:
         room.check_expired_locks()
         return room.class_locks.get(class_id)
 
+    async def broadcast_agent_message_activity(
+        self,
+        *,
+        project_id: UUID,
+        message_id: UUID,
+        attempt_id: UUID,
+        sequence: int,
+        activity_code: str,
+        occurred_at: datetime,
+        activity_type: str | None = None,
+    ) -> None:
+        """Difunde el estado transitorio a todos los miembros conectados al proyecto."""
+        if sequence < 1:
+            raise ValueError("La secuencia de actividad debe ser positiva.")
+        payload = {
+            "type": "agent_message_activity",
+            "project_id": str(project_id),
+            "message_id": str(message_id),
+            "attempt_id": str(attempt_id),
+            "sequence": sequence,
+            "activity_code": activity_code,
+            "occurred_at": occurred_at.isoformat(),
+        }
+        if activity_type is not None:
+            payload["activity_type"] = activity_type
+        await self.broadcast(project_id, payload)
+
+    async def broadcast_agent_component_reserved(
+        self,
+        *,
+        project_id: UUID,
+        message_id: UUID,
+        sequence: int,
+        component_type: str,
+        component_id: UUID,
+        activity_type: str,
+        attribute_id: UUID | None = None,
+    ) -> None:
+        """Registra la reserva efímera en la sala y la difunde a los colaboradores."""
+        if sequence < 1:
+            raise ValueError("La secuencia de reserva debe ser positiva.")
+        room = self.rooms.setdefault(project_id, ProjectRoomState(project_id))
+        reservation = room.reserve_component(
+            project_id=project_id,
+            message_id=message_id,
+            sequence=sequence,
+            component_type=component_type,
+            component_id=component_id,
+            activity_type=activity_type,
+            attribute_id=attribute_id,
+        )
+        payload = {
+            "type": "agent_component_reserved",
+            "project_id": str(project_id),
+            "message_id": str(message_id),
+            "sequence": sequence,
+            "component_type": component_type,
+            "component_id": str(component_id),
+            "activity_type": reservation.activity_type,
+            "attribute_id": (
+                str(reservation.attribute_id) if reservation.attribute_id else None
+            ),
+        }
+        await self.broadcast(project_id, payload)
+
+    async def broadcast_agent_component_reservations_released(
+        self,
+        *,
+        project_id: UUID,
+        message_id: UUID,
+    ) -> None:
+        """Libera reservas asociadas a un mensaje terminal y anuncia la liberación."""
+        room = self.rooms.get(project_id)
+        if room is not None:
+            room.release_message_reservations(message_id)
+        payload = {
+            "type": "agent_component_reservations_released",
+            "project_id": str(project_id),
+            "message_id": str(message_id),
+        }
+        await self.broadcast(project_id, payload)
+
+    async def broadcast_agent_message_accepted(
+        self,
+        *,
+        project_id: UUID,
+        message_id: UUID,
+        user_id: str,
+        author_name: str,
+        author_avatar_url: str | None,
+        prompt: str,
+        image_url: str | None,
+        status: str,
+        cancel_requested: bool,
+        response_markdown: str | None,
+        created_at: datetime,
+    ) -> None:
+        """Anuncia un mensaje aceptado y persistido a la sala del proyecto."""
+        if status not in {"queued", "running"} or not prompt.strip():
+            raise ValueError("La aceptación del mensaje del asistente está incompleta.")
+        await self.broadcast(
+            project_id,
+            {
+                "type": "agent_message_accepted",
+                "project_id": str(project_id),
+                "message_id": str(message_id),
+                "user_id": user_id,
+                "author_name": author_name,
+                "author_avatar_url": author_avatar_url,
+                "prompt": prompt,
+                "image_url": image_url,
+                "status": status,
+                "cancel_requested": cancel_requested,
+                "response_markdown": response_markdown,
+                "created_at": created_at.isoformat(),
+            },
+        )
+
     async def broadcast(
         self,
         project_id: UUID,
@@ -132,35 +252,37 @@ class ConnectionManager:
         for peer in dead:
             await self.disconnect(peer)
 
-    async def broadcast_agent_lock(
-        self, project_id: UUID, user_id: str, activity_id: UUID
+    async def broadcast_agent_message_finished(
+        self,
+        *,
+        project_id: UUID,
+        user_id: str,
+        message_id: UUID,
+        prompt: str,
+        image_url: str | None,
+        status: str,
+        response_markdown: str,
+        created_at: datetime,
+        author_name: str | None = None,
+        author_avatar_url: str | None = None,
     ) -> None:
-        """Notifica a todos los colaboradores que el agente IA ha bloqueado el lienzo."""
-        room = self.rooms.setdefault(project_id, ProjectRoomState(project_id))
-        room.set_agent_lock(user_id, activity_id)
+        """Publica la proyección terminal del chat a los miembros conectados."""
+        if status not in {"completed", "partial", "failed", "cancelled"} or not response_markdown.strip():
+            raise ValueError("El evento terminal del asistente está incompleto.")
         await self.broadcast(
             project_id,
             {
-                "type": "agent_lock",
+                "type": "agent_message_finished",
+                "project_id": str(project_id),
+                "message_id": str(message_id),
                 "user_id": user_id,
-                "activity_id": str(activity_id),
-            },
-        )
-
-    async def broadcast_agent_finished(
-        self, project_id: UUID, user_id: str, activity_id: UUID, state: str
-    ) -> None:
-        """Notifica a todos los colaboradores que el agente IA finalizó y liberó el lienzo."""
-        room = self.rooms.get(project_id)
-        if room is not None:
-            room.release_agent_lock(activity_id)
-        await self.broadcast(
-            project_id,
-            {
-                "type": "agent_finished",
-                "user_id": user_id,
-                "activity_id": str(activity_id),
-                "state": state,
+                "author_name": author_name or user_id,
+                "author_avatar_url": author_avatar_url,
+                "prompt": prompt,
+                "image_url": image_url,
+                "created_at": created_at.isoformat(),
+                "status": status,
+                "response_markdown": response_markdown,
             },
         )
 

@@ -86,6 +86,4 @@ def test_server_message_helpers() -> None:
     assert mutation["data"] == {"id": "c1", "x": 10, "y": 20}
     assert mutation["sender_id"] == "u1"
 
-    active_lock = {"user_id": "assistant", "activity_id": str(uuid4())}
-    recovered = presence_snapshot(peers, locks, active_lock)
-    assert recovered["agent_lock"] == active_lock
+    assert "agent_lock" not in snapshot

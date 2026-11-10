@@ -6,9 +6,14 @@ from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
 from app.modules.diagram.application.services.diagram_relation_materializer import (
+    validate_relation_materialization,
+)
+from app.modules.diagram.domain.services.diagram_relation_materialization_policy import (
     MaterializationStrategy,
     determine_materialization_plan,
-    validate_relation_materialization,
+)
+from app.modules.diagram.application.use_cases.diagram_relation.realtime_projection import (
+    class_snapshot,
 )
 from app.modules.diagram.domain.entities.diagram_attribute import DiagramAttribute
 from app.modules.diagram.domain.entities.diagram_class import DiagramClass
@@ -61,6 +66,7 @@ class CreateDiagramRelationCommand:
     source_cardinality: DiagramCardinality | None
     target_cardinality: DiagramCardinality | None
     materialization: dict[str, Any]
+    event_sender_id: str | None = None
 
 
 class CreateDiagramRelationUseCase:
@@ -261,14 +267,47 @@ class CreateDiagramRelationUseCase:
             )
             self.diagram_attribute_repository.save(fa_attr)
 
+        if plan.strategy == MaterializationStrategy.BRIDGE_CLASS:
+            affected_class_ids = [bridge_class_id] if bridge_class_id is not None else []
+        elif plan.strategy == MaterializationStrategy.FOREIGN_KEY:
+            affected_class_ids = list(
+                {
+                    UUID(str(item["class_id"]))
+                    for item in command.materialization["foreign_attributes"]
+                }
+            )
+        else:
+            shared = command.materialization["shared_primary_key"]
+            shared_attribute = self.diagram_attribute_repository.find_by_id(
+                UUID(str(shared["attribute_id"]))
+            )
+            affected_class_ids = [shared_attribute.class_id] if shared_attribute else []
+
+        self.uow.flush()
+        materialized_classes = []
+        for class_id in affected_class_ids:
+            affected_class = self.diagram_class_repository.find_by_id(class_id)
+            if affected_class is not None:
+                materialized_classes.append(
+                    class_snapshot(
+                        affected_class,
+                        self.diagram_attribute_repository.list_by_class_id(class_id),
+                    )
+                )
+
         self.uow.publish_event(DiagramRelationCreatedEvent(
-            project_id=command.project_id, sender_id=command.user_id,
+            project_id=command.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"id": str(relation.id), "name": relation.name,
                   "relation_type": relation.relation_type.value,
                   "source": {"class_id": str(relation.source_class_id), "handle": relation.source_handle.value,
                               "cardinality": relation.source_cardinality.value if relation.source_cardinality else None},
                   "target": {"class_id": str(relation.target_class_id), "handle": relation.target_handle.value,
-                              "cardinality": relation.target_cardinality.value if relation.target_cardinality else None}},
+                              "cardinality": relation.target_cardinality.value if relation.target_cardinality else None},
+                  "bridge": ({"class_id": str(bridge_class_id), "handle": bridge_handle.value}
+                             if bridge_class_id is not None and bridge_handle is not None else None),
+                  "materialized_classes": materialized_classes,
+                  "removed_class_ids": [],
+                  "removed_attribute_ids": []},
         ))
         self.uow.commit()
 

@@ -17,7 +17,7 @@ from app.modules.diagram.domain.repositories.diagram_attribute_repository import
 from app.modules.diagram.domain.repositories.diagram_class_repository import (
     DiagramClassRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramAttributeRepositionedEvent
 
 
@@ -28,6 +28,7 @@ class RepositionDiagramAttributeCommand:
     attribute_id: UUID
     user_id: str
     target_position: int
+    event_sender_id: str | None = None
 
 
 class RepositionDiagramAttributeUseCase:
@@ -38,7 +39,7 @@ class RepositionDiagramAttributeUseCase:
         access_policy: DiagramAccessPolicy,
         diagram_class_repository: DiagramClassRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_class_repository = diagram_class_repository
@@ -91,7 +92,7 @@ class RepositionDiagramAttributeUseCase:
             diagram_class.id, secondaries
         )
         self.uow.publish_event(DiagramAttributeRepositionedEvent(
-            project_id=diagram_class.project_id, sender_id=command.user_id,
+            project_id=diagram_class.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"class_id": str(attribute.class_id), "attribute_id": str(attribute.id), "position": attribute.position},
         ))
         self.uow.commit()

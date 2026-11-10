@@ -18,7 +18,7 @@ from app.modules.diagram.domain.repositories.diagram_attribute_repository import
 from app.modules.diagram.domain.repositories.diagram_class_repository import (
     DiagramClassRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramAttributeUpdatedEvent
 
 
@@ -31,6 +31,7 @@ class UpdateDiagramAttributeCommand:
     name: str | object = UNSET
     data_type: DiagramAttributeDataType | None | object = UNSET
     is_nullable: bool | object = UNSET
+    event_sender_id: str | None = None
 
 
 class UpdateDiagramAttributeUseCase:
@@ -41,7 +42,7 @@ class UpdateDiagramAttributeUseCase:
         access_policy: DiagramAccessPolicy,
         diagram_class_repository: DiagramClassRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_class_repository = diagram_class_repository
@@ -73,7 +74,7 @@ class UpdateDiagramAttributeUseCase:
         # 4. Persistir y confirmar transacción
         self.diagram_attribute_repository.save(attribute)
         self.uow.publish_event(DiagramAttributeUpdatedEvent(
-            project_id=diagram_class.project_id, sender_id=command.user_id,
+            project_id=diagram_class.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"class_id": str(attribute.class_id), "attribute_id": str(attribute.id),
                   "name": attribute.name, "data_type": attribute.data_type.value if attribute.data_type else None,
                   "is_nullable": attribute.is_nullable},

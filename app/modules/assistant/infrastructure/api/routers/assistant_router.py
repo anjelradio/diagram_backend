@@ -1,297 +1,318 @@
+from datetime import datetime
+import logging
 from uuid import UUID
-from fastapi import APIRouter, File, Form, Response, UploadFile, status
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile
 
 from app.core.dependencies import CurrentUser, UoWDep
 from app.core.errors.handlers import format_error
-from app.modules.assistant.application.services.action_executor import (
-    ActionExecutor,
-    AtomicBatchUnitOfWork,
+from app.modules.assistant.application.use_cases.create_agent_message import (
+    CreateAgentMessageCommand,
+    CreateAgentMessageUseCase,
+    MAX_IMAGE_BYTES,
 )
-from app.modules.assistant.application.services.action_planner import (
-    ActionPlanner,
+from app.modules.assistant.application.use_cases.submit_agent_message import (
+    SubmitAgentMessageUseCase,
 )
-from app.modules.assistant.application.use_cases.process_image_command import (
-    ProcessImageCommand,
-    ProcessImageCommandUseCase,
-)
-from app.modules.assistant.application.use_cases.process_voice_command import (
-    ProcessVoiceCommand,
-    ProcessVoiceCommandUseCase,
+from app.modules.assistant.application.queries.agent_messages import AgentMessagesQueryHandler
+from app.modules.assistant.application.use_cases.cancel_agent_message import (
+    CancelAgentMessageUseCase,
 )
 from app.modules.assistant.domain.exceptions import (
-    AgentActionValidationException,
-    AgentAlreadyActiveException,
-    AgentInterpretationFailedException,
-    AiServiceUnavailableException,
-    InvalidAudioFormatException,
-    InvalidImageFormatException,
+    AgentMessagePersistenceException,
+    ImageStorageUnavailableException,
+    InvalidAgentMessageException,
 )
-from app.modules.assistant.infrastructure.api.schemas.assistant_schemas import (
-    ActionResultRead,
-    ImageCommandResultRead,
-    VoiceCommandResultRead,
+from app.modules.assistant.infrastructure.api.schemas.agent_message_schemas import (
+    AgentMessageActiveRead,
+    AgentMessageCreatedRead,
+    AgentMessagePageRead,
+    AgentMessageRead,
 )
 from app.modules.assistant.infrastructure.external.cloudinary_image_provider import (
     CloudinaryImageProvider,
 )
-from app.modules.assistant.infrastructure.external.gemini_ai_provider import (
-    GeminiAiProvider,
+from app.modules.assistant.infrastructure.realtime.agent_acceptance_publisher import (
+    WebSocketAgentAcceptancePublisher,
 )
-from app.modules.diagram.application.services.diagram_access_policy import (
-    DiagramAccessPolicy,
+from app.modules.assistant.infrastructure.realtime.agent_component_reservation_publisher import (
+    WebSocketAgentComponentReservationPublisher,
 )
-from app.modules.diagram.domain.exceptions import DiagramWriteForbiddenException
-from app.modules.diagram.infrastructure.persistence.readers.sqlmodel_diagram_snapshot_reader import (
-    SQLModelDiagramSnapshotReader,
+from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_message_repository import (
+    SQLModelAgentMessageRepository,
 )
-from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_attribute_repository import (
-    SQLModelDiagramAttributeRepository,
+from app.modules.assistant.infrastructure.persistence.repositories.sqlmodel_agent_continuation_repository import (
+    SQLModelAgentContinuationRepository,
 )
-from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_class_repository import (
-    SQLModelDiagramClassRepository,
+from app.modules.assistant.infrastructure.persistence.readers.sqlmodel_agent_author_name_reader import (
+    SQLModelAgentAuthorNameReader,
 )
-from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_relation_repository import (
-    SQLModelDiagramRelationRepository,
+from app.modules.collaboration.application.services.project_access_policy import (
+    ProjectAccessPolicy,
 )
-from app.modules.diagram.infrastructure.realtime.connection_manager import (
-    connection_manager,
-)
-from app.modules.projects.domain.exceptions import ProjectNotFoundException
 from app.modules.collaboration.infrastructure.persistence.repositories.sqlmodel_project_member_repository import (
     SQLModelProjectMemberRepository,
 )
+from app.modules.projects.domain.exceptions import ProjectNotFoundException
 from app.modules.projects.infrastructure.persistence.repositories.sqlmodel_project_repository import (
     SQLModelProjectRepository,
 )
 
-router = APIRouter(prefix="/assistant", tags=["Asistente"])
+router = APIRouter(prefix="/projects/{project_id}/assistant/messages", tags=["Assistant"])
+logger = logging.getLogger(__name__)
 
 
-@router.post(
-    "/voice",
-    response_model=VoiceCommandResultRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Procesar comando de voz para editar diagrama",
-)
-async def process_voice_command(
-    project_id: UUID = Form(..., description="ID del proyecto del diagrama"),
-    audio: UploadFile = File(..., description="Archivo de audio con la orden de voz"),
-    current_user: CurrentUser = None,
-    uow: UoWDep = None,
-) -> VoiceCommandResultRead | Response:
-    audio_data = await audio.read()
-    audio_mime = audio.content_type or "audio/wav"
-
-    project_repo = SQLModelProjectRepository(uow.session)
-    member_repo = SQLModelProjectMemberRepository(uow.session)
-    access_policy = DiagramAccessPolicy(
-        project_repository=project_repo,
-        project_member_repository=member_repo,
+def _build_query_handler(uow: UoWDep) -> AgentMessagesQueryHandler:
+    session = uow.session
+    return AgentMessagesQueryHandler(
+        message_repository=SQLModelAgentMessageRepository(session),
+        access_policy=ProjectAccessPolicy(
+            project_repository=SQLModelProjectRepository(session),
+            project_member_repository=SQLModelProjectMemberRepository(session),
+        ),
+        author_name_reader=SQLModelAgentAuthorNameReader(session),
     )
 
-    batch_uow = AtomicBatchUnitOfWork(real_uow=uow)
-    class_repo = SQLModelDiagramClassRepository(uow.session)
-    attr_repo = SQLModelDiagramAttributeRepository(uow.session)
-    rel_repo = SQLModelDiagramRelationRepository(uow.session)
-    snapshot_reader = SQLModelDiagramSnapshotReader(uow.session)
 
-    planner = ActionPlanner()
-    executor = ActionExecutor(
-        access_policy=access_policy,
-        diagram_class_repository=class_repo,
-        diagram_attribute_repository=attr_repo,
-        diagram_relation_repository=rel_repo,
-        batch_uow=batch_uow,
+@router.get("", response_model=AgentMessagePageRead)
+def list_agent_messages(
+    project_id: UUID,
+    current_user: CurrentUser,
+    uow: UoWDep,
+    limit: int = Query(default=6, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    snapshot_at: datetime | None = None,
+) -> AgentMessagePageRead:
+    page = _build_query_handler(uow).list_messages(
+        project_id=project_id,
+        user_id=current_user.user_id,
+        limit=limit,
+        offset=offset,
+        snapshot_at=snapshot_at,
     )
-    ai_provider = GeminiAiProvider()
-
-    use_case = ProcessVoiceCommandUseCase(
-        access_policy=access_policy,
-        ai_provider=ai_provider,
-        diagram_snapshot_reader=snapshot_reader,
-        action_planner=planner,
-        action_executor=executor,
-        batch_uow=batch_uow,
-        real_uow=uow,
-        connection_manager=connection_manager,
+    return AgentMessagePageRead(
+        items=[AgentMessageRead.model_validate(item) for item in page.items],
+        limit=page.limit,
+        offset=page.offset,
+        next_offset=page.next_offset,
+        has_more=page.has_more,
+        snapshot_at=page.snapshot_at,
     )
 
+
+@router.get("/active", response_model=AgentMessageActiveRead)
+def get_active_agent_message(
+    project_id: UUID,
+    current_user: CurrentUser,
+    uow: UoWDep,
+) -> AgentMessageActiveRead:
+    message = _build_query_handler(uow).get_active(
+        project_id=project_id,
+        user_id=current_user.user_id,
+    )
+    return AgentMessageActiveRead(
+        message=AgentMessageRead.model_validate(message) if message is not None else None
+    )
+
+
+@router.get("/{message_id}", response_model=AgentMessageRead)
+def get_agent_message(
+    project_id: UUID,
+    message_id: UUID,
+    current_user: CurrentUser,
+    uow: UoWDep,
+) -> AgentMessageRead:
+    message = _build_query_handler(uow).get_message(
+        project_id=project_id,
+        user_id=current_user.user_id,
+        message_id=message_id,
+    )
+    return AgentMessageRead.model_validate(message)
+
+
+@router.post("/{message_id}/cancel", response_model=AgentMessageRead)
+def cancel_agent_message(
+    project_id: UUID,
+    message_id: UUID,
+    current_user: CurrentUser,
+    uow: UoWDep,
+    response: Response,
+) -> AgentMessageRead | JSONResponse:
+    session = uow.session
+    use_case = CancelAgentMessageUseCase(
+        message_repository=SQLModelAgentMessageRepository(session),
+        project_access_policy=ProjectAccessPolicy(
+            project_repository=SQLModelProjectRepository(session),
+            project_member_repository=SQLModelProjectMemberRepository(session),
+        ),
+        uow=uow,
+        reservation_publisher=WebSocketAgentComponentReservationPublisher(),
+        continuation_repository=SQLModelAgentContinuationRepository(session),
+    )
     try:
-        dto = await use_case.execute(
-            ProcessVoiceCommand(
-                project_id=project_id,
-                user_id=current_user.user_id,
-                audio_data=audio_data,
-                audio_mime_type=audio_mime,
-            )
-        )
-
-        return VoiceCommandResultRead(
-            activity_id=dto.activity_id,
-            state=dto.state,
-            transcription=dto.transcription,
-            resume=dto.resume,
-            actions_count=dto.actions_count,
-            actions=[
-                ActionResultRead(
-                    type=a["type"],
-                    status=a["status"],
-                    summary=a["summary"],
-                )
-                for a in dto.actions
-            ],
-        )
-
-    except InvalidAudioFormatException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=format_error(exc.code, exc.message),
-        )
-    except DiagramWriteForbiddenException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_403_FORBIDDEN,
-            content=format_error(exc.code, exc.message),
-        )
-    except AgentAlreadyActiveException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content=format_error(exc.code, exc.message),
+        result = use_case.execute(
+            message_id=message_id,
+            project_id=project_id,
+            user_id=current_user.user_id,
         )
     except ProjectNotFoundException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content=format_error(exc.code, exc.message),
-        )
-    except AgentInterpretationFailedException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=format_error(exc.code, exc.message),
-        )
-    except AgentActionValidationException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=format_error(exc.code, exc.message),
-        )
-    except AiServiceUnavailableException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content=format_error(exc.code, exc.message),
-        )
+        return JSONResponse(status_code=404, content=format_error(exc.code, exc.message))
+    except AgentMessagePersistenceException as exc:
+        return JSONResponse(status_code=503, content=format_error(exc.code, exc.message))
+
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if result.cancellation_pending else status.HTTP_200_OK
+    )
+    view = _build_query_handler(uow).get_message(
+        project_id=project_id,
+        user_id=current_user.user_id,
+        message_id=message_id,
+    )
+    return AgentMessageRead.model_validate(view)
 
 
-@router.post(
-    "/image",
-    response_model=ImageCommandResultRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Procesar imagen de diagrama para recrear entidades",
-)
-async def process_image_command(
-    project_id: UUID = Form(..., description="ID del proyecto del diagrama"),
-    image: UploadFile = File(..., description="Archivo de imagen con el diagrama"),
-    prompt: str | None = Form(default=None, description="Instrucción complementaria opcional"),
-    current_user: CurrentUser = None,
-    uow: UoWDep = None,
-) -> ImageCommandResultRead | Response:
-    image_data = await image.read()
-    image_mime = image.content_type or "image/png"
-
-    project_repo = SQLModelProjectRepository(uow.session)
-    member_repo = SQLModelProjectMemberRepository(uow.session)
-    access_policy = DiagramAccessPolicy(
-        project_repository=project_repo,
-        project_member_repository=member_repo,
+def _build_create_use_case(uow: UoWDep) -> CreateAgentMessageUseCase:
+    session = uow.session
+    access_policy = ProjectAccessPolicy(
+        project_repository=SQLModelProjectRepository(session),
+        project_member_repository=SQLModelProjectMemberRepository(session),
+    )
+    return CreateAgentMessageUseCase(
+        project_access_policy=access_policy,
+        message_repository=SQLModelAgentMessageRepository(session),
+        image_storage=CloudinaryImageProvider(),
+        uow=uow,
     )
 
-    batch_uow = AtomicBatchUnitOfWork(real_uow=uow)
-    class_repo = SQLModelDiagramClassRepository(uow.session)
-    attr_repo = SQLModelDiagramAttributeRepository(uow.session)
-    rel_repo = SQLModelDiagramRelationRepository(uow.session)
-    snapshot_reader = SQLModelDiagramSnapshotReader(uow.session)
 
-    planner = ActionPlanner()
-    executor = ActionExecutor(
-        access_policy=access_policy,
-        diagram_class_repository=class_repo,
-        diagram_attribute_repository=attr_repo,
-        diagram_relation_repository=rel_repo,
-        batch_uow=batch_uow,
-    )
-    ai_provider = GeminiAiProvider()
-    image_storage_provider = CloudinaryImageProvider()
-
-    use_case = ProcessImageCommandUseCase(
-        access_policy=access_policy,
-        ai_provider=ai_provider,
-        diagram_snapshot_reader=snapshot_reader,
-        action_planner=planner,
-        action_executor=executor,
-        batch_uow=batch_uow,
-        real_uow=uow,
-        connection_manager=connection_manager,
-        image_storage_provider=image_storage_provider,
-    )
+async def _read_form_payload(request: Request) -> tuple[UUID, str, bytes | None, str | None]:
+    if "multipart/form-data" not in request.headers.get("content-type", "").lower():
+        raise HTTPException(status_code=422, detail="Se requiere multipart/form-data.")
 
     try:
-        dto = await use_case.execute(
-            ProcessImageCommand(
+        async with request.form(max_files=1, max_fields=5) as form:
+            items = form.multi_items()
+            keys = [key for key, _ in items]
+            if set(keys) - {"message_id", "prompt", "image"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail="El formulario contiene campos no permitidos.",
+                )
+            if (
+                keys.count("message_id") != 1
+                or keys.count("prompt") != 1
+                or keys.count("image") > 1
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Los campos del formulario están duplicados o incompletos.",
+                )
+
+            raw_message_id = form.get("message_id")
+            prompt = form.get("prompt")
+            image = form.get("image")
+            if not isinstance(raw_message_id, str) or not isinstance(prompt, str):
+                raise HTTPException(
+                    status_code=422,
+                    detail="message_id y prompt deben ser texto.",
+                )
+            try:
+                message_id = UUID(raw_message_id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="message_id debe ser un UUID válido.",
+                ) from exc
+
+            image_data: bytes | None = None
+            image_content_type: str | None = None
+            if image is not None:
+                if not isinstance(image, UploadFile):
+                    raise HTTPException(status_code=422, detail="image debe ser un archivo.")
+                image_data = await image.read(MAX_IMAGE_BYTES + 1)
+                image_content_type = image.content_type
+                if len(image_data) > MAX_IMAGE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="La imagen supera el límite de 10 MiB.",
+                    )
+            return message_id, prompt, image_data, image_content_type
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="El formulario multipart no es válido.",
+        ) from exc
+
+
+@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=AgentMessageCreatedRead)
+async def create_agent_message(
+    project_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+    uow: UoWDep,
+    response: Response,
+) -> AgentMessageCreatedRead:
+    """Acepta el mensaje persistido sin esperar la ejecución del agente."""
+    message_id, prompt, image_data, image_content_type = await _read_form_payload(request)
+
+    try:
+        runner = getattr(request.app.state, "agent_job_runner", None)
+        if runner is None:
+            raise HTTPException(status_code=503, detail="El worker del asistente no está disponible.")
+        author_profile = SQLModelAgentAuthorNameReader(uow.session).find_profiles(
+            {current_user.user_id}
+        ).get(current_user.user_id)
+        author_name = (
+            author_profile.name if author_profile and author_profile.name
+            else current_user.name or current_user.user_id
+        )
+        author_avatar_url = author_profile.avatar_url if author_profile else None
+        submitted = await SubmitAgentMessageUseCase(
+            create_message=_build_create_use_case(uow),
+            dispatcher=runner,
+            acceptance_publisher=WebSocketAgentAcceptancePublisher(),
+        ).execute(
+            CreateAgentMessageCommand(
+                message_id=message_id,
                 project_id=project_id,
                 user_id=current_user.user_id,
-                image_data=image_data,
-                image_mime_type=image_mime,
                 prompt=prompt,
-            )
+                image_data=image_data,
+                image_content_type=image_content_type,
+            ),
+            author_name=author_name,
+            author_avatar_url=author_avatar_url,
         )
-
-        return ImageCommandResultRead(
-            activity_id=dto.activity_id,
-            state=dto.state,
-            transcription=dto.transcription,
-            resume=dto.resume,
-            image_url=dto.image_url,
-            actions_count=dto.actions_count,
-            actions=[
-                ActionResultRead(
-                    type=a["type"],
-                    status=a["status"],
-                    summary=a["summary"],
-                )
-                for a in dto.actions
-            ],
-        )
-
-    except InvalidImageFormatException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=format_error(exc.code, exc.message),
-        )
-    except DiagramWriteForbiddenException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_403_FORBIDDEN,
-            content=format_error(exc.code, exc.message),
-        )
-    except AgentAlreadyActiveException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content=format_error(exc.code, exc.message),
-        )
+        result = submitted.message
     except ProjectNotFoundException as exc:
+        return JSONResponse(status_code=404, content=format_error(exc.code, exc.message))
+    except InvalidAgentMessageException as exc:
         return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=422,
             content=format_error(exc.code, exc.message),
         )
-    except AgentInterpretationFailedException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=format_error(exc.code, exc.message),
-        )
-    except AgentActionValidationException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=format_error(exc.code, exc.message),
-        )
-    except AiServiceUnavailableException as exc:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content=format_error(exc.code, exc.message),
-        )
+    except AgentMessagePersistenceException as exc:
+        return JSONResponse(status_code=503, content=format_error(exc.code, exc.message))
+    except ImageStorageUnavailableException as exc:
+        return JSONResponse(status_code=503, content=format_error(exc.code, exc.message))
+
+    response.status_code = (
+        status.HTTP_200_OK if result.was_existing else status.HTTP_202_ACCEPTED
+    )
+    return AgentMessageCreatedRead(
+        message_id=result.message_id,
+        project_id=result.project_id,
+        status=result.status,
+        image_url=result.image_url,
+        prompt=result.prompt,
+        user_id=result.user_id,
+        author_name=author_name,
+        author_avatar_url=author_avatar_url,
+        cancel_requested=result.cancel_requested,
+        created_at=result.created_at,
+        response_markdown=result.response_markdown,
+    )

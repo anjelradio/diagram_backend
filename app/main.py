@@ -36,6 +36,7 @@ from app.modules.diagram.infrastructure.api.routers.diagram_ws_router import (
 from app.modules.assistant.infrastructure.api.routers.assistant_router import (
     router as assistant_router,
 )
+from app.modules.assistant.infrastructure.services.agent_job_runner import AgentJobRunner
 from app.modules.code_generation.infrastructure.api.routers.code_generation_router import (
     router as code_generation_router,
 )
@@ -77,9 +78,14 @@ async def lifespan(app: FastAPI):
     monitor_task = asyncio.create_task(
         connection_manager.monitor_stale_connections()
     )
+    runner_factory = getattr(app.state, "agent_job_runner_factory", AgentJobRunner)
+    agent_job_runner = runner_factory()
+    app.state.agent_job_runner = agent_job_runner
+    await agent_job_runner.start()
     try:
         yield
     finally:
+        await agent_job_runner.stop()
         monitor_task.cancel()
         try:
             await monitor_task

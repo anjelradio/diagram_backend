@@ -30,11 +30,14 @@ class WebSocketBroadcastEventHandler:
             "data": event.data,
             "sender_id": event.sender_id,
         }
+        # Agent mutations use a synthetic sender id, so never exclude the real
+        # author (or any collaborator) from the committed canvas change.
+        exclude_user_id = None if event.sender_id == "assistant" else event.sender_id
         asyncio.run_coroutine_threadsafe(
             connection_manager.broadcast(
                 event.project_id,
                 payload,
-                exclude_user_id=event.sender_id,
+                exclude_user_id=exclude_user_id,
             ),
             _event_loop,
         )

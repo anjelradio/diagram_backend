@@ -1,679 +1,294 @@
 import pytest
-from uuid import UUID, uuid4
 
-from app.modules.assistant.application.ports.providers.ai_provider import AiAction
-from app.modules.assistant.application.services.action_planner import (
-    ActionPlanner,
+from app.modules.assistant.application.ports.providers.ai_provider import (
+    AiResult,
+    ModelRole,
 )
-from app.modules.assistant.domain.enums.agent_action_type import AgentActionType
+from app.modules.assistant.application.services.planning.action_planner import ActionPlanner
 from app.modules.assistant.domain.exceptions import (
-    AgentActionValidationException,
-)
-from app.modules.diagram.application.ports.readers.diagram_snapshot_reader import (
-    DiagramAttributeSnapshotDto,
-    DiagramClassSnapshotDto,
-    DiagramRelationEndpointSnapshotDto,
-    DiagramRelationSnapshotDto,
-    DiagramSnapshotDto,
-)
-from app.modules.diagram.domain.enums.diagram_cardinality import (
-    DiagramCardinality,
-)
-from app.modules.diagram.domain.enums.diagram_relation_type import (
-    DiagramRelationType,
+    ExecutionPlanErrorReason,
+    InvalidExecutionPlanException,
 )
 
 
-def test_plan_create_class_and_attribute() -> None:
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-    snapshot = DiagramSnapshotDto(classes=[], relations=[])
+class PlannerProvider:
+    def __init__(self, text):
+        self.text = text
+        self.calls = []
 
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_CLASS,
-            payload={"name": "Cliente"},
-        ),
-        AiAction(
-            type=AgentActionType.CREATE_ATTRIBUTE,
-            payload={"class_name": "Cliente", "name": "email", "data_type": "TEXT"},
-        ),
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    assert len(planned) == 2
-    create_class_action = planned[0]
-    assert create_class_action.action_type == AgentActionType.CREATE_CLASS
-    assert create_class_action.payload["name"] == "Cliente"
-    assert "id" in create_class_action.payload
-    assert "primary_attribute_id" in create_class_action.payload
-
-    create_attr_action = planned[1]
-    assert create_attr_action.action_type == AgentActionType.CREATE_ATTRIBUTE
-    assert create_attr_action.payload["class_id"] == create_class_action.payload["id"]
-    assert create_attr_action.payload["name"] == "email"
-    assert create_attr_action.payload["position"] == 1
-
-    zero_position = planner.plan_actions(
-        project_id,
-        user_id,
-        [AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "Origen", "position_x": 0, "position_y": 0})],
-        snapshot,
-    )[0]
-    assert zero_position.payload["position_x"] == 0
-    assert zero_position.payload["position_y"] == 0
-
-
-def test_plan_duplicate_class_raises_error() -> None:
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-
-    existing_class = DiagramClassSnapshotDto(
-        id=uuid4(),
-        name="Producto",
-        position_x=100.0,
-        position_y=100.0,
-        attributes=[],
-    )
-    snapshot = DiagramSnapshotDto(classes=[existing_class], relations=[])
-
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_CLASS,
-            payload={"name": "Producto"},
+    async def complete(self, request):
+        self.calls.append(request)
+        return AiResult(
+            text=self.text,
+            model_role=request.model_role,
+            model="test-model",
         )
-    ]
-
-    with pytest.raises(AgentActionValidationException):
-        planner.plan_actions(project_id, user_id, actions, snapshot)
 
 
-def test_plan_create_relation_foreign_key() -> None:
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-
-    c1_id = uuid4()
-    c2_id = uuid4()
-    c1 = DiagramClassSnapshotDto(
-        id=c1_id,
-        name="Empresa",
-        position_x=100.0,
-        position_y=100.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    c2 = DiagramClassSnapshotDto(
-        id=c2_id,
-        name="Empleado",
-        position_x=400.0,
-        position_y=100.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    snapshot = DiagramSnapshotDto(classes=[c1, c2], relations=[])
-
-    # Empresa 1 -> * Empleado (FK en Empleado hacia Empresa)
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Empresa",
-                "target_class_name": "Empleado",
-                "relation_type": "ASSOCIATION",
-                "source_cardinality": "1",
-                "target_cardinality": "0..*",
-            },
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("response", "max_tasks", "reason"),
+    [
+        ('not valid json', 4, ExecutionPlanErrorReason.PLANNER_INVALID_JSON),
+        ('[]', 4, ExecutionPlanErrorReason.PLANNER_NOT_OBJECT),
+        ('{"goal":"test","tasks":[]}', 4, ExecutionPlanErrorReason.PLANNER_INVALID_TASKS),
+        ('{"goal":"test","tasks":[{},{}]}', 1, ExecutionPlanErrorReason.PLANNER_TASK_LIMIT),
+        ('{"goal":"test","tasks":[{"id":"a","objective":"A","depends_on":["missing"]}]}', 4,
+         ExecutionPlanErrorReason.PLAN_INVALID_DEPENDENCY),
+        ('{"goal":"test","tasks":[{"id":"a","objective":"A"},{"id":"a","objective":"B"}]}', 4,
+         ExecutionPlanErrorReason.PLAN_DUPLICATE_TASK_ID),
+    ],
+)
+async def test_planner_reports_safe_validation_reason(response, max_tasks, reason):
+    with pytest.raises(InvalidExecutionPlanException) as failure:
+        await ActionPlanner(PlannerProvider(response), max_tasks=max_tasks).create_plan(
+            "Crea A y edita B"
         )
+
+    assert failure.value.reason is reason
+    assert response not in str(failure.value)
+
+
+def test_single_intent_uses_direct_route_and_compound_or_mixed_prompt_plans():
+    assert not ActionPlanner.requires_plan("Crea la clase Producto")
+    assert ActionPlanner.requires_plan("Crea Producto, relaciona Pedido y dime si está bien")
+    assert ActionPlanner.requires_plan("Crea Producto y luego agrega precio")
+
+
+def test_subjunctive_requests_keep_mutation_tools_and_plan_compound_work():
+    prompt = (
+        "Quiero que crees una clase llamada Caballo con atributos Establo, SESPE y Cerca. "
+        "También quiero que crees Pato y luego quiero que relaciones Caballo con Pato "
+        "de muchos a muchos."
+    )
+    assert ActionPlanner.requires_mutation(prompt)
+    assert ActionPlanner.requires_plan(prompt)
+    assert ActionPlanner.build_direct_plan(prompt).tasks[0]["kind"] == "mutation"
+    assert ActionPlanner.requires_mutation("¿Crees que las relaciones están bien?") is False
+    assert ActionPlanner.requires_plan("Quiero que crees una clase Caballo") is False
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "es una relación de herencia un gato es animal, la clase padre es Animal y la clase hijo es Cat",
+        "Cat hereda de Animal",
+        "sería una relación de composición; la clase padre es Casa y la clase hija es Habitación",
+    ],
+)
+def test_relation_configuration_followups_keep_mutation_tools(prompt):
+    assert ActionPlanner.requires_mutation(prompt) is True
+    assert ActionPlanner.requires_plan(prompt) is False
+    assert ActionPlanner.build_direct_plan(prompt).tasks[0]["kind"] == "mutation"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "¿Es una relación de herencia entre Cat y Animal?",
+        "Por ejemplo: Cat hereda de Animal",
+        "No relaciones Cat con Animal",
+    ],
+)
+def test_relation_configuration_questions_examples_and_negations_remain_read_only(prompt):
+    assert ActionPlanner.requires_mutation(prompt) is False
+
+
+@pytest.mark.anyio
+async def test_planner_creates_valid_task_dag_using_planning_role():
+    provider = PlannerProvider(
+        '{"goal":"Crear y revisar","tasks":['
+        '{"id":"mutate","objective":"Crear entidades","kind":"mutation","depends_on":[]},'
+        '{"id":"answer","objective":"Responder sobre el resultado","kind":"answer","depends_on":["mutate"]}]}'
+    )
+    planner = ActionPlanner(provider, max_tasks=4, max_output_tokens=4_321)
+
+    plan = await planner.create_plan("Crea Producto y dime qué mejorar")
+
+    assert plan is not None
+    assert plan.tasks[1]["depends_on"] == ["mutate"]
+    assert provider.calls[0].model_role is ModelRole.PLANNING
+    assert provider.calls[0].response_format == "text"
+    assert provider.calls[0].enable_reasoning is True
+    assert provider.calls[0].max_output_tokens == 4_321
+
+
+@pytest.mark.anyio
+async def test_planner_keeps_operation_checklist_for_batched_mutations():
+    provider = PlannerProvider(
+        '{"goal":"Crear dos clases","tasks":['
+        '{"id":"classes","objective":"Crear Producto y Categoria","kind":"mutation",'
+        '"depends_on":[],"expected_actions":["CREATE_CLASS","CREATE_CLASS"]}]}'
+    )
+    plan = await ActionPlanner(provider).create_plan("Crea Producto y luego Categoria")
+    assert plan is not None
+    assert plan.tasks[0]["expected_actions"] == ["CREATE_CLASS", "CREATE_CLASS"]
+
+
+@pytest.mark.anyio
+async def test_planner_keeps_named_operation_targets():
+    provider = PlannerProvider(
+        '{"goal":"Crear dos clases","tasks":['
+        '{"id":"classes","objective":"Crear Producto y Categoria","kind":"mutation",'
+        '"depends_on":[],"expected_actions":['
+        '{"kind":"CREATE_CLASS","name":"Producto"},'
+        '{"kind":"CREATE_CLASS","name":"Categoria"}]}]}'
+    )
+    plan = await ActionPlanner(provider).create_plan("Crea Producto y luego Categoria")
+    assert plan is not None
+    assert plan.tasks[0]["expected_actions"][1]["name"] == "Categoria"
+
+
+@pytest.mark.anyio
+async def test_planner_ignores_malformed_optional_checklist_without_losing_valid_plan():
+    provider = PlannerProvider(
+        '{"goal":"Crear dos clases","tasks":['
+        '{"id":"classes","objective":"Crear Producto y Categoria","kind":"mutation",'
+        '"depends_on":[],"expected_actions":[{"kind":"UNKNOWN"}]}]}'
+    )
+    plan = await ActionPlanner(provider).create_plan("Crea Producto y luego Categoria")
+    assert plan is not None
+    assert "expected_actions" not in plan.tasks[0]
+
+
+@pytest.mark.anyio
+async def test_planner_normalizes_integer_task_references_from_json():
+    provider = PlannerProvider(
+        '{"goal":"Crear y relacionar","tasks":['
+        '{"id":1,"objective":"Crear entidades","kind":"mutation","depends_on":[]},'
+        '{"id":2,"objective":"Relacionar entidades","kind":"mutation","depends_on":[1]}]}'
+    )
+
+    plan = await ActionPlanner(provider, max_tasks=4).create_plan(
+        "Crea Producto y luego relaciónalo con Pedido"
+    )
+
+    assert plan is not None
+    assert [task["id"] for task in plan.tasks] == ["1", "2"]
+    assert plan.tasks[1]["depends_on"] == ["1"]
+
+
+@pytest.mark.anyio
+async def test_planner_rejects_invalid_or_oversized_plan():
+    provider = PlannerProvider('{"goal":"G","tasks":[{"id":"a","objective":"A","depends_on":["b"]}]}')
+    with pytest.raises(InvalidExecutionPlanException):
+        await ActionPlanner(provider, max_tasks=1).create_plan("Crea A y edita B")
+
+
+@pytest.mark.anyio
+async def test_planner_moves_queries_after_mutations_and_adds_dependencies():
+    provider = PlannerProvider(
+        '{"goal":"Editar y revisar","tasks":['
+        '{"id":"review","objective":"Revisar el resultado","kind":"answer","depends_on":[]},'
+        '{"id":"edit","objective":"Editar la clase","kind":"mutation","depends_on":[]}]} '
+    )
+
+    plan = await ActionPlanner(provider, max_tasks=4).create_plan(
+        "Edita Producto y dime si quedó bien"
+    )
+
+    assert [task["id"] for task in plan.tasks] == ["edit", "review"]
+    assert plan.tasks[1]["depends_on"] == ["edit"]
+
+
+@pytest.mark.anyio
+async def test_planner_discards_provider_generated_progress_and_unknown_task_fields():
+    provider = PlannerProvider(
+        '{"goal":"Crear y revisar","tasks":['
+        '{"id":"create","objective":"Crear Producto","kind":"mutation",'
+        '"depends_on":[],"status":"completed","operation_ids":["fake-op"],'
+        '"result_refs":["fake-class"],"error_code":"forged","extra":"ignored"}]}'
+    )
+
+    plan = await ActionPlanner(provider, max_tasks=2).create_plan(
+        "Crea Producto y después inspecciona el resultado"
+    )
+
+    assert plan is not None
+    assert plan.tasks == [
+        {
+            "id": "create",
+            "objective": "Crear Producto",
+            "kind": "mutation",
+            "depends_on": [],
+            "status": "pending",
+            "operation_ids": [],
+            "result_refs": [],
+        }
     ]
 
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
 
-    assert len(planned) == 1
-    rel_action = planned[0]
-    assert rel_action.action_type == AgentActionType.CREATE_RELATION
-    assert rel_action.payload["source_class_id"] == c1_id
-    assert rel_action.payload["target_class_id"] == c2_id
+def test_planner_build_direct_plan_creates_homogeneous_execution_plan():
+    """Ruta directa: genera un ExecutionPlan válido con las mismas reglas de validación."""
+    mutation_plan = ActionPlanner.build_direct_plan("Crea Producto", max_tool_calls=10)
+    assert mutation_plan.goal == "Crea Producto"
+    assert len(mutation_plan.tasks) == 1
+    assert mutation_plan.tasks[0]["id"] == "direct"
+    assert mutation_plan.tasks[0]["kind"] == "mutation"
+    assert mutation_plan.tasks[0]["status"] == "pending"
+    assert mutation_plan.limits == {"max_tool_calls": 10}
 
-    mat = rel_action.payload["materialization"]
-    assert mat["strategy"] == "FOREIGN_KEY"
-    assert len(mat["foreign_attributes"]) == 1
-    fa = mat["foreign_attributes"][0]
-    assert fa["class_id"] == str(c2_id)  # Empleado recibe la FK
-    assert fa["referenced_class_id"] == str(c1_id)  # Referencia a Empresa
-    assert rel_action.payload["source_handle"].value == "RIGHT_CENTER"
-    assert rel_action.payload["target_handle"].value == "LEFT_CENTER"
+    query_plan = ActionPlanner.build_direct_plan("¿Cuántas clases hay?")
+    assert query_plan.tasks[0]["kind"] == "answer"
+    assert query_plan.tasks[0]["status"] == "pending"
 
 
-def test_plan_create_relation_many_to_many_bridge() -> None:
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-
-    c1_id = uuid4()
-    c2_id = uuid4()
-    c1 = DiagramClassSnapshotDto(
-        id=c1_id,
-        name="Estudiante",
-        position_x=100.0,
-        position_y=100.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    c2 = DiagramClassSnapshotDto(
-        id=c2_id,
-        name="Curso",
-        position_x=400.0,
-        position_y=100.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    snapshot = DiagramSnapshotDto(classes=[c1, c2], relations=[])
-
-    # Estudiante * -> * Curso (N:M -> clase puente)
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Estudiante",
-                "target_class_name": "Curso",
-                "relation_type": "ASSOCIATION",
-                "source_cardinality": "0..*",
-                "target_cardinality": "1..*",
-            },
-        )
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    assert len(planned) == 1
-    rel_action = planned[0]
-    mat = rel_action.payload["materialization"]
-    assert mat["strategy"] == "BRIDGE_CLASS"
-    bridge = mat["bridge_class"]
-    assert "EstudianteCurso" in bridge["name"]
-    assert len(bridge["foreign_attributes"]) == 2
-
-
-def test_plan_relation_replaces_congested_proposed_handle() -> None:
-    planner = ActionPlanner()
-    project_id = uuid4()
-    source_id, target_id = uuid4(), uuid4()
-    source = DiagramClassSnapshotDto(
-        id=source_id,
-        name="Origen",
-        position_x=0.0,
-        position_y=0.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(), name="id", data_type="UUID", position=0,
-                is_primary_key=True, is_nullable=False,
-            )
-        ],
-    )
-    target = DiagramClassSnapshotDto(
-        id=target_id,
-        name="Destino",
-        position_x=400.0,
-        position_y=0.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(), name="id", data_type="UUID", position=0,
-                is_primary_key=True, is_nullable=False,
-            )
-        ],
-    )
-    occupied = [
-        DiagramRelationSnapshotDto(
-            id=uuid4(), name="r1", relation_type="ASSOCIATION",
-            source=DiagramRelationEndpointSnapshotDto(source_id, "RIGHT_CENTER"),
-            target=DiagramRelationEndpointSnapshotDto(target_id, "LEFT_CENTER"),
-            source_cardinality="1", target_cardinality="1", bridge=None,
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("prompt", "expected_requires_plan"),
+    [
+        ("Crea la clase Factura", False),
+        ("Crea Factura con id, numero y fecha", False),  # Múltiples atributos de una misma clase: ruta directa
+        ("Crea Factura y Crea Detalle", True),  # Múltiples clases / mutaciones compuestas
+        ("Crea las clases Producto y Categoria", True),
+        ("Agrega atributos precio y stock a Producto", True),
+        ("Crea Factura y luego añade fecha", True),  # Marcador de secuencia
+        ("Crea Factura y dime si quedó bien", True),  # Mutación + pregunta
+        ("¿Qué clases existen en el diagrama?", False),  # Solo lectura
+        ("Quiero que crees las clases con sus atributos y también con sus relaciones. Crea absolutamente todo.", True),
+        (
+            "Crear las clases Producto (con atributos id, nombre, precio, stock), Cliente (con atributos id, nombre, email, teléfono), Venta (con atributos id, fecha, total) y DetalleVenta (con atributos id, cantidad, precio_unitario). Establecer las siguientes relaciones: Asociación 1 a muchos entre Cliente y Venta; Composición 1 a muchos entre Venta y DetalleVenta; y Asociación entre Producto y DetalleVenta.",
+            True,
         ),
-        DiagramRelationSnapshotDto(
-            id=uuid4(), name="r2", relation_type="ASSOCIATION",
-            source=DiagramRelationEndpointSnapshotDto(source_id, "RIGHT_CENTER"),
-            target=DiagramRelationEndpointSnapshotDto(target_id, "LEFT_CENTER"),
-            source_cardinality="1", target_cardinality="1", bridge=None,
-        ),
-    ]
-    planned = planner.plan_actions(
-        project_id,
-        "user_1",
-        [
-            AiAction(
-                type=AgentActionType.CREATE_RELATION,
-                payload={
-                    "source_class_name": "Origen",
-                    "target_class_name": "Destino",
-                    "relation_type": "ASSOCIATION",
-                    "source_handle": "RIGHT_CENTER",
-                    "target_handle": "LEFT_CENTER",
-                    "source_cardinality": "1",
-                    "target_cardinality": "1",
-                },
-            )
-        ],
-        DiagramSnapshotDto(classes=[source, target], relations=occupied),
-    )
-    assert planned[0].payload["source_handle"].value != "RIGHT_CENTER"
+    ],
+)
+async def test_planner_requires_plan_distinguishes_direct_and_compound(prompt, expected_requires_plan):
+    assert ActionPlanner.requires_plan(prompt) is expected_requires_plan
 
 
-def test_plan_create_recursive_association_foreign_key() -> None:
-    """Verifica que ActionPlanner procese correctamente una relación recursiva 1:N."""
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-
-    c_id = uuid4()
-    c = DiagramClassSnapshotDto(
-        id=c_id,
-        name="Empleado",
-        position_x=200.0,
-        position_y=200.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    snapshot = DiagramSnapshotDto(classes=[c], relations=[])
-
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Empleado",
-                "target_class_name": "Empleado",
-                "relation_type": "ASSOCIATION",
-                "name": "Supervisa",
-                "source_cardinality": "0..*",
-                "target_cardinality": "0..1",
-            },
-        )
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    assert len(planned) == 1
-    rel_action = planned[0]
-    assert rel_action.action_type == AgentActionType.CREATE_RELATION
-    assert rel_action.payload["source_class_id"] == c_id
-    assert rel_action.payload["target_class_id"] == c_id
-    assert rel_action.payload["source_handle"] != rel_action.payload["target_handle"]
-
-    mat = rel_action.payload["materialization"]
-    assert mat["strategy"] == "FOREIGN_KEY"
-    assert len(mat["foreign_attributes"]) == 1
-    fa = mat["foreign_attributes"][0]
-    assert fa["class_id"] == str(c_id)
-    assert fa["referenced_class_id"] == str(c_id)
-    assert fa["is_nullable"] is True
+@pytest.mark.anyio
+async def test_planner_rejects_empty_task_objective_and_validates_coverage():
+    provider = PlannerProvider('{"goal":"Crear clase","tasks":[{"id":"t1","objective":"   ","kind":"mutation"}]}')
+    with pytest.raises(InvalidExecutionPlanException) as exc:
+        await ActionPlanner(provider, max_tasks=4).create_plan("Crea Producto y luego crea Pedido")
+    assert exc.value.reason in {
+        ExecutionPlanErrorReason.PLANNER_INVALID_TASK_FIELDS,
+        ExecutionPlanErrorReason.PLAN_INVALID_TASK,
+    }
 
 
-def test_plan_create_recursive_association_many_to_many() -> None:
-    """Verifica que ActionPlanner procese correctamente una relación recursiva N:M con clase puente y 2 FKs distintas."""
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-
-    c_id = uuid4()
-    c = DiagramClassSnapshotDto(
-        id=c_id,
-        name="Persona",
-        position_x=200.0,
-        position_y=200.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    snapshot = DiagramSnapshotDto(classes=[c], relations=[])
-
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Persona",
-                "target_class_name": "Persona",
-                "relation_type": "ASSOCIATION",
-                "name": "Conoce",
-                "source_cardinality": "0..*",
-                "target_cardinality": "0..*",
-            },
-        )
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    assert len(planned) == 1
-    rel_action = planned[0]
-    mat = rel_action.payload["materialization"]
-    assert mat["strategy"] == "BRIDGE_CLASS"
-    bridge = mat["bridge_class"]
-    assert len(bridge["foreign_attributes"]) == 2
-    fk1, fk2 = bridge["foreign_attributes"]
-    assert fk1["name"] != fk2["name"]
-    assert fk1["name"] == "persona_a_id"
-    assert fk2["name"] == "persona_b_id"
-    assert fk1["referenced_class_id"] == str(c_id)
-    assert fk2["referenced_class_id"] == str(c_id)
+from tests.modules.assistant.fixtures.agent_language_cases import (
+    LANGUAGE_TEST_CASES,
+    LanguageTestCase,
+)
 
 
-def test_plan_create_recursive_non_association_rejected() -> None:
-    """Verifica que intentar auto-relacionar mediante Generalization o Composition lance AgentActionValidationException."""
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-
-    c_id = uuid4()
-    c = DiagramClassSnapshotDto(
-        id=c_id,
-        name="Cuenta",
-        position_x=200.0,
-        position_y=200.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    snapshot = DiagramSnapshotDto(classes=[c], relations=[])
-
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Cuenta",
-                "target_class_name": "Cuenta",
-                "relation_type": "GENERALIZATION",
-            },
-        )
-    ]
-
-    with pytest.raises(AgentActionValidationException):
-        planner.plan_actions(project_id, user_id, actions, snapshot)
+@pytest.mark.parametrize("case", LANGUAGE_TEST_CASES, ids=[c.prompt for c in LANGUAGE_TEST_CASES])
+def test_action_planner_corpus_intent_and_mutation(case: LanguageTestCase):
+    assert ActionPlanner.requires_mutation(case.prompt) is case.requires_mutation
+    direct_plan = ActionPlanner.build_direct_plan(case.prompt)
+    expected_kind = "mutation" if case.requires_mutation else "answer"
+    assert direct_plan.tasks[0]["kind"] == expected_kind
 
 
-def test_plan_create_recursive_association_accepts_valid_proposed_handles() -> None:
-    """Verifica que ActionPlanner respete handles propuestos por la IA si son distintos y no están congestionados."""
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
+def test_action_planner_haz_and_crea_equivalence():
+    plan_haz = ActionPlanner.build_direct_plan("haz una clase Papanatas con atributo Arcoiris")
+    plan_crea = ActionPlanner.build_direct_plan("crea una clase Papanatas con atributo Arcoiris")
 
-    c_id = uuid4()
-    c = DiagramClassSnapshotDto(
-        id=c_id,
-        name="Nodo",
-        position_x=200.0,
-        position_y=200.0,
-        attributes=[
-            DiagramAttributeSnapshotDto(
-                id=uuid4(),
-                name="id",
-                data_type="UUID",
-                position=0,
-                is_primary_key=True,
-                is_nullable=False,
-            )
-        ],
-    )
-    snapshot = DiagramSnapshotDto(classes=[c], relations=[])
+    assert plan_haz.tasks[0]["kind"] == "mutation"
+    assert plan_crea.tasks[0]["kind"] == "mutation"
+    assert ActionPlanner.requires_mutation("haz una clase Papanatas con atributo Arcoiris") is True
+    assert ActionPlanner.requires_mutation("crea una clase Papanatas con atributo Arcoiris") is True
 
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Nodo",
-                "target_class_name": "Nodo",
-                "relation_type": "ASSOCIATION",
-                "source_handle": "TOP_LEFT",
-                "target_handle": "TOP_RIGHT",
-                "source_cardinality": "0..*",
-                "target_cardinality": "0..1",
-            },
-        )
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    assert len(planned) == 1
-    rel_action = planned[0]
-    assert rel_action.payload["source_handle"].value == "TOP_LEFT"
-    assert rel_action.payload["target_handle"].value == "TOP_RIGHT"
-
-
-def test_plan_ignores_id_and_foreign_key_attributes_on_create() -> None:
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-    snapshot = DiagramSnapshotDto(classes=[], relations=[])
-
-    actions = [
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "Articulo"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "ID"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "categoria_id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "id_seccion"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "idProveedor"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "titulo"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "idioma"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Articulo", "name": "identificador_legible"}),
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    # Solo deben existir CREATE_CLASS y los 3 atributos legítimos
-    assert len(planned) == 4
-    attr_names = [a.payload["name"] for a in planned if a.action_type == AgentActionType.CREATE_ATTRIBUTE]
-    assert "id" not in attr_names
-    assert "ID" not in attr_names
-    assert "categoria_id" not in attr_names
-    assert "id_seccion" not in attr_names
-    assert "idProveedor" not in attr_names
-    assert attr_names == ["titulo", "idioma", "identificador_legible"]
-
-
-def test_plan_user_scenario_producto_venta_bridge_and_aggregation() -> None:
-    """
-    Escenario exacto del usuario:
-    - Producto (id, nombre, precio, imagen)
-    - Venta (id, fecha)
-    - ProductoVenta (id, producto_id, venta_id, cantidad) - tabla intermedia M:N emitida en el lote
-    - Hola (id) con agregación hacia Venta
-    - Relación M:N entre Producto y Venta
-    - Relación Aggregation entre Hola (origen) y Venta (destino)
-    """
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-    snapshot = DiagramSnapshotDto(classes=[], relations=[])
-
-    actions = [
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "Producto", "position_x": 100, "position_y": 100}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Producto", "name": "id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Producto", "name": "nombre", "data_type": "TEXT"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Producto", "name": "precio", "data_type": "FLOAT"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Producto", "name": "imagen", "data_type": "TEXT"}),
-
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "Venta", "position_x": 600, "position_y": 100}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Venta", "name": "id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Venta", "name": "fecha", "data_type": "DATE"}),
-
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "Hola", "position_x": 600, "position_y": 400}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "Hola", "name": "id"}),
-
-        # Clase intermedia redundante emitida por la IA
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "ProductoVenta"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "ProductoVenta", "name": "id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "ProductoVenta", "name": "producto_id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "ProductoVenta", "name": "venta_id"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "ProductoVenta", "name": "cantidad", "data_type": "INTEGER"}),
-
-        # Relaciones
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Producto",
-                "target_class_name": "Venta",
-                "relation_type": "ASSOCIATION",
-                "name": "Detalle",
-                "source_cardinality": "0..*",
-                "target_cardinality": "0..*",
-            },
-        ),
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "Hola",
-                "target_class_name": "Venta",
-                "relation_type": "AGGREGATION",
-                "name": "",
-            },
-        ),
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    # 1. Verificar clases creadas en la fase 1 (Producto, Venta, Hola; ProductoVenta suprimida por redundancia M:N)
-    class_actions = [a for a in planned if a.action_type == AgentActionType.CREATE_CLASS]
-    created_class_names = [a.payload["name"] for a in class_actions]
-    assert "Producto" in created_class_names
-    assert "Venta" in created_class_names
-    assert "Hola" in created_class_names
-    assert "ProductoVenta" not in created_class_names
-    assert len(class_actions) == 3
-
-    # 2. Verificar relaciones creadas
-    rel_actions = [a for a in planned if a.action_type == AgentActionType.CREATE_RELATION]
-    assert len(rel_actions) == 2
-    mn_rel = next(r for r in rel_actions if r.payload["materialization"]["strategy"] == "BRIDGE_CLASS")
-    agg_rel = next(r for r in rel_actions if r.payload["materialization"]["strategy"] == "FOREIGN_KEY")
-
-    # La clase puente generada es ProductoVenta
-    bridge = mn_rel.payload["materialization"]["bridge_class"]
-    assert "ProductoVenta" in bridge["name"]
-    assert len(bridge["foreign_attributes"]) == 2
-
-    # La agregación coloca FK en Venta (destino)
-    venta_action = next(c for c in class_actions if c.payload["name"] == "Venta")
-    assert agg_rel.payload["materialization"]["foreign_attributes"][0]["class_id"] == str(venta_action.payload["id"])
-
-    # 3. Verificar atributos
-    attr_actions = [a for a in planned if a.action_type == AgentActionType.CREATE_ATTRIBUTE]
-    # No debe haber ningún atributo 'id', 'producto_id', ni 'venta_id' creado manualmente
-    for a in attr_actions:
-        assert a.payload["name"] not in ("id", "producto_id", "venta_id")
-
-    # Producto: nombre, precio, imagen
-    prod_id = next(c.payload["id"] for c in class_actions if c.payload["name"] == "Producto")
-    prod_attrs = [a.payload["name"] for a in attr_actions if a.payload["class_id"] == prod_id]
-    assert sorted(prod_attrs) == ["imagen", "nombre", "precio"]
-
-    # Venta: fecha
-    venta_id = venta_action.payload["id"]
-    venta_attrs = [a.payload["name"] for a in attr_actions if a.payload["class_id"] == venta_id]
-    assert venta_attrs == ["fecha"]
-
-    # Hola: ningún atributo manual (nace con su PK id)
-    hola_id = next(c.payload["id"] for c in class_actions if c.payload["name"] == "Hola")
-    hola_attrs = [a.payload["name"] for a in attr_actions if a.payload["class_id"] == hola_id]
-    assert len(hola_attrs) == 0
-
-    # ProductoVenta (clase puente): cantidad creada en fase 4
-    bridge_attrs = [a for a in attr_actions if a.payload["class_id"] == UUID(bridge["id"])]
-    assert len(bridge_attrs) == 1
-    assert bridge_attrs[0].payload["name"] == "cantidad"
-
-
-def test_plan_out_of_order_actions_executed_canonically() -> None:
-    """Acciones emitidas fuera de orden (relaciones antes de clases, atributos de puente antes de la relación)."""
-    planner = ActionPlanner()
-    project_id = uuid4()
-    user_id = "user_1"
-    snapshot = DiagramSnapshotDto(classes=[], relations=[])
-
-    # Relación M:N al principio, luego atributos de puente, luego clases
-    actions = [
-        AiAction(
-            type=AgentActionType.CREATE_RELATION,
-            payload={
-                "source_class_name": "A",
-                "target_class_name": "B",
-                "relation_type": "ASSOCIATION",
-                "source_cardinality": "*",
-                "target_cardinality": "*",
-            },
-        ),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "AB", "name": "peso"}),
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "B"}),
-        AiAction(type=AgentActionType.CREATE_CLASS, payload={"name": "A"}),
-        AiAction(type=AgentActionType.CREATE_ATTRIBUTE, payload={"class_name": "A", "name": "codigo"}),
-    ]
-
-    planned = planner.plan_actions(project_id, user_id, actions, snapshot)
-
-    # Debe ejecutarse sin error
-    action_types = [a.action_type for a in planned]
-    # Clases primero, luego atributo de A, luego relación M:N, luego atributo de puente
-    assert action_types[0] == AgentActionType.CREATE_CLASS
-    assert action_types[1] == AgentActionType.CREATE_CLASS
-    assert action_types[2] == AgentActionType.CREATE_ATTRIBUTE
-    assert action_types[3] == AgentActionType.CREATE_RELATION
-    assert action_types[4] == AgentActionType.CREATE_ATTRIBUTE
-
-    assert planned[2].payload["name"] == "codigo"
-    assert planned[4].payload["name"] == "peso"
 
 

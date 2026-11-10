@@ -12,4 +12,6 @@ COPY . .
 
 EXPOSE 8000
 
+# El runner y las conexiones WebSocket viven en memoria de proceso; no añadir --workers
+# hasta contar con transporte compartido para difundir realtime entre procesos.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

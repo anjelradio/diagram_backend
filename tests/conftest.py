@@ -13,6 +13,20 @@ from app.shared.infrastructure.db.better_auth import BetterAuthUser
 
 from sqlalchemy import event
 
+
+class _NoopAgentJobRunner:
+    def __init__(self):
+        self.notifications = []
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    def notify(self, message_id=None):
+        self.notifications.append(message_id)
+
 @pytest.fixture(name="test_engine")
 def test_engine_fixture():
     engine = create_engine(
@@ -56,8 +70,13 @@ def client_fixture(session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_session] = get_session_override
     app.dependency_overrides[get_current_user] = get_current_user_override
+    app.state.agent_job_runner_factory = _NoopAgentJobRunner
 
-    with TestClient(app) as client:
+    # Python 3.14's default asyncio loop in the current test runtime does not wake
+    # when Starlette's AnyIO portal schedules work from the test thread. Use the
+    # already-installed uvloop backend so TestClient startup and lifespan complete.
+    with TestClient(app, backend_options={"use_uvloop": True}) as client:
         yield client
 
     app.dependency_overrides.clear()
+    app.state.__dict__.pop("agent_job_runner_factory", None)

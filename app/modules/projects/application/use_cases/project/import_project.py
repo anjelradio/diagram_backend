@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from app.modules.diagram.application.services.diagram_relation_materializer import (
+from app.modules.diagram.domain.services.diagram_relation_materialization_policy import (
     MaterializationStrategy,
     determine_materialization_plan,
 )

@@ -2,18 +2,23 @@ import uuid
 import pytest
 
 from app.modules.diagram.application.services.diagram_relation_materializer import (
-    MaterializationStrategy,
     calculate_bridge_class_position,
-    determine_materialization_plan,
     generate_bridge_class_name,
     validate_relation_materialization,
 )
 from app.modules.diagram.domain.enums.diagram_cardinality import DiagramCardinality
 from app.modules.diagram.domain.enums.diagram_relation_type import DiagramRelationType
+from app.modules.diagram.domain.services.diagram_relation_materialization_policy import (
+    MaterializationStrategy,
+    determine_materialization_plan,
+)
 from app.modules.diagram.domain.exceptions import (
     InvalidDiagramRelationMaterializationException,
 )
 
+
+def test_exactly_one_accepts_legacy_1_to_1_notation():
+    assert DiagramCardinality("1..1") is DiagramCardinality.EXACTLY_ONE
 
 def test_one_to_many_materialization():
     source_id = uuid.uuid4()
@@ -582,3 +587,5 @@ def test_self_referencing_many_to_many_materialization():
     }
     validate_relation_materialization(relation_id, plan, bridge_payload)
 
+def test_exactly_one_accepts_legacy_1_to_1_notation():
+    assert DiagramCardinality("1..1") is DiagramCardinality.EXACTLY_ONE

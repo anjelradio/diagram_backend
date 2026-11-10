@@ -23,6 +23,7 @@ class RenameDiagramClassCommand:
     class_id: UUID
     user_id: str
     name: str
+    event_sender_id: str | None = None
 
 
 class RenameDiagramClassUseCase:
@@ -61,7 +62,7 @@ class RenameDiagramClassUseCase:
         existing.rename(clean_name)
         self.diagram_class_repository.save(existing)
         self.uow.publish_event(DiagramClassRenamedEvent(
-            project_id=existing.project_id, sender_id=command.user_id,
+            project_id=existing.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"class_id": str(existing.id), "name": existing.name},
         ))
         self.uow.commit()

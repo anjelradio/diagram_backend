@@ -14,7 +14,7 @@ from app.modules.diagram.domain.repositories.diagram_attribute_repository import
 from app.modules.diagram.domain.repositories.diagram_class_repository import (
     DiagramClassRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramAttributeDeletedEvent
 
 
@@ -24,6 +24,7 @@ class DeleteDiagramAttributeCommand:
 
     attribute_id: UUID
     user_id: str
+    event_sender_id: str | None = None
 
 
 class DeleteDiagramAttributeUseCase:
@@ -34,7 +35,7 @@ class DeleteDiagramAttributeUseCase:
         access_policy: DiagramAccessPolicy,
         diagram_class_repository: DiagramClassRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_class_repository = diagram_class_repository
@@ -85,7 +86,7 @@ class DeleteDiagramAttributeUseCase:
             diagram_class.id, remaining_secondaries
         )
         self.uow.publish_event(DiagramAttributeDeletedEvent(
-            project_id=diagram_class.project_id, sender_id=command.user_id,
+            project_id=diagram_class.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"class_id": str(attribute.class_id), "attribute_id": str(attribute.id)},
         ))
         self.uow.commit()

@@ -55,5 +55,4 @@ uvloop==0.22.1
 watchfiles==1.2.0
 websockets==16.0
 pytest>=8.0.0
-google-genai==2.23.0
 cloudinary==1.46.2

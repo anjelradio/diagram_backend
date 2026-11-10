@@ -1,0 +1,149 @@
+{
+  "version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "rel_missing_type_dry_answer",
+      "description": "Usuario pide relación entre A y B sin tipo, asistente pregunta tipo, usuario responde seco 'herencia', asistente pregunta dirección o ejecuta si ya está definido",
+      "turns": [
+        {
+          "user_prompt": "Haz una relación entre la clase Usuario y la clase Perfil",
+          "expected_assistant_act": "elicit_slots",
+          "expected_missing_slots": ["relation.type"],
+          "expected_intent": "CREATE_RELATION"
+        },
+        {
+          "user_prompt": "herencia",
+          "expected_assistant_act": "elicit_slots",
+          "expected_resolved_slots": {
+            "relation.type": "GENERALIZATION"
+          },
+          "expected_missing_slots": ["relation.direction"]
+        },
+        {
+          "user_prompt": "Usuario es la clase padre",
+          "expected_assistant_act": "fulfill",
+          "expected_resolved_slots": {
+            "relation.type": "GENERALIZATION",
+            "relation.superclass": "Usuario",
+            "relation.subclass": "Perfil"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rel_missing_multiple_partial_answers",
+      "description": "Asistente pregunta tipo y cardinalidades de asociación, usuario responde primero solo tipo 'asociación' y luego cardinalidades",
+      "turns": [
+        {
+          "user_prompt": "Conecta la clase Cliente con la clase Pedido",
+          "expected_assistant_act": "elicit_slots",
+          "expected_missing_slots": ["relation.type"]
+        },
+        {
+          "user_prompt": "que sea una asociación",
+          "expected_assistant_act": "elicit_slots",
+          "expected_resolved_slots": {
+            "relation.type": "ASSOCIATION"
+          },
+          "expected_missing_slots": ["relation.endpoint_cardinalities"]
+        },
+        {
+          "user_prompt": "1 a muchos, 1 en Cliente y 0..* en Pedido",
+          "expected_assistant_act": "fulfill",
+          "expected_resolved_slots": {
+            "relation.type": "ASSOCIATION",
+            "relation.source_cardinality": "1",
+            "relation.target_cardinality": "0..*"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rel_recommendation_then_accept",
+      "description": "Usuario pide relación, asistente pregunta tipo, usuario pregunta '¿cuál me recomiendas?', asistente recomienda y usuario responde 'ok, hazlo'",
+      "turns": [
+        {
+          "user_prompt": "Crea una relación entre Factura y DetalleFactura",
+          "expected_assistant_act": "elicit_slots",
+          "expected_missing_slots": ["relation.type"]
+        },
+        {
+          "user_prompt": "¿cuál relación tú me recomiendas?",
+          "expected_assistant_act": "consult_with_proposal",
+          "expected_proposal": {
+            "relation.type": "COMPOSITION",
+            "relation.whole": "Factura",
+            "relation.part": "DetalleFactura"
+          }
+        },
+        {
+          "user_prompt": "ok, hazlo",
+          "expected_assistant_act": "fulfill",
+          "expected_resolved_slots": {
+            "relation.type": "COMPOSITION",
+            "relation.whole": "Factura",
+            "relation.part": "DetalleFactura"
+          }
+        }
+      ]
+    },
+    {
+      "id": "attr_missing_class_and_type",
+      "description": "Usuario pide crear un atributo sin especificar clase, responde clase y tipo",
+      "turns": [
+        {
+          "user_prompt": "Agrega un atributo llamado email",
+          "expected_assistant_act": "elicit_slots",
+          "expected_missing_slots": ["attribute.target_class"]
+        },
+        {
+          "user_prompt": "En la clase Usuario",
+          "expected_assistant_act": "fulfill",
+          "expected_resolved_slots": {
+            "attribute.name": "email",
+            "attribute.target_class": "Usuario"
+          }
+        }
+      ]
+    },
+    {
+      "id": "correction_in_middle_of_dialog",
+      "description": "Usuario cambia de opinión sobre el tipo antes de finalizar",
+      "turns": [
+        {
+          "user_prompt": "Relaciona Producto y Categoria",
+          "expected_assistant_act": "elicit_slots",
+          "expected_missing_slots": ["relation.type"]
+        },
+        {
+          "user_prompt": "asociación",
+          "expected_assistant_act": "elicit_slots",
+          "expected_missing_slots": ["relation.endpoint_cardinalities"]
+        },
+        {
+          "user_prompt": "no, mejor que sea agregación donde Categoria contiene a Producto",
+          "expected_assistant_act": "fulfill",
+          "expected_resolved_slots": {
+            "relation.type": "AGGREGATION",
+            "relation.whole": "Categoria",
+            "relation.part": "Producto"
+          }
+        }
+      ]
+    },
+    {
+      "id": "explicit_decline",
+      "description": "Usuario cancela la solicitud pendiente",
+      "turns": [
+        {
+          "user_prompt": "Crea una relación entre Proveedor e Insumo",
+          "expected_assistant_act": "elicit_slots"
+        },
+        {
+          "user_prompt": "cancela, ya no hagas nada",
+          "expected_assistant_act": "decline"
+        }
+      ]
+    }
+  ]
+}

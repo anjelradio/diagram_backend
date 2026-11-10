@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from app.core.security.auth import AuthUser, get_current_user
@@ -6,6 +7,110 @@ from app.main import app
 from app.modules.projects.infrastructure.persistence.models.project_model import (
     ProjectModel,
 )
+
+
+def test_delete_class_cascades_relations_with_single_commit():
+    from app.modules.diagram.application.use_cases.diagram_class.delete_diagram_class import (
+        DeleteDiagramClassCommand,
+        DeleteDiagramClassUseCase,
+    )
+
+    class_id = uuid.uuid4()
+    relation = MagicMock(id=uuid.uuid4())
+    diagram_class = MagicMock(id=class_id, project_id=uuid.uuid4())
+    classes = MagicMock()
+    classes.find_by_id.side_effect = [diagram_class, diagram_class]
+    relations = MagicMock()
+    relations.list_by_class_id.return_value = [relation]
+    attributes = MagicMock()
+    attributes.list_by_class_id.return_value = []
+    relation_deleter = MagicMock()
+    uow = MagicMock()
+    use_case = DeleteDiagramClassUseCase(
+        access_policy=MagicMock(),
+        diagram_class_repository=classes,
+        diagram_relation_repository=relations,
+        diagram_attribute_repository=attributes,
+        delete_diagram_relation_use_case=relation_deleter,
+        uow=uow,
+    )
+
+    use_case.execute(DeleteDiagramClassCommand(class_id, "user-1"))
+
+    relation_deleter.execute.assert_called_once()
+    assert relation_deleter.execute.call_args.kwargs == {"commit_transaction": False}
+    classes.delete.assert_called_once_with(class_id)
+    uow.commit.assert_called_once_with()
+
+
+def test_delete_class_rolls_back_when_cascade_fails():
+    from app.modules.diagram.application.use_cases.diagram_class.delete_diagram_class import (
+        DeleteDiagramClassCommand,
+        DeleteDiagramClassUseCase,
+    )
+
+    class_id = uuid.uuid4()
+    diagram_class = MagicMock(id=class_id, project_id=uuid.uuid4())
+    classes = MagicMock()
+    classes.find_by_id.return_value = diagram_class
+    relations = MagicMock()
+    relations.list_by_class_id.return_value = []
+    attributes = MagicMock()
+    attributes.list_by_class_id.return_value = []
+    classes.delete.side_effect = RuntimeError("cascade failed")
+    uow = MagicMock()
+    use_case = DeleteDiagramClassUseCase(
+        access_policy=MagicMock(),
+        diagram_class_repository=classes,
+        diagram_relation_repository=relations,
+        diagram_attribute_repository=attributes,
+        delete_diagram_relation_use_case=MagicMock(),
+        uow=uow,
+    )
+
+    try:
+        use_case.execute(DeleteDiagramClassCommand(class_id, "user-1"))
+        raise AssertionError("Expected cascade failure")
+    except RuntimeError as error:
+        assert str(error) == "cascade failed"
+
+    uow.rollback.assert_called_once_with()
+    uow.commit.assert_not_called()
+
+
+def test_delete_class_rolls_back_when_cascade_fails():
+    from app.modules.diagram.application.use_cases.diagram_class.delete_diagram_class import (
+        DeleteDiagramClassCommand,
+        DeleteDiagramClassUseCase,
+    )
+
+    class_id = uuid.uuid4()
+    diagram_class = MagicMock(id=class_id, project_id=uuid.uuid4())
+    classes = MagicMock()
+    classes.find_by_id.return_value = diagram_class
+    relations = MagicMock()
+    relations.list_by_class_id.return_value = []
+    attributes = MagicMock()
+    attributes.list_by_class_id.return_value = []
+    classes.delete.side_effect = RuntimeError("cascade failed")
+    uow = MagicMock()
+    use_case = DeleteDiagramClassUseCase(
+        access_policy=MagicMock(),
+        diagram_class_repository=classes,
+        diagram_relation_repository=relations,
+        diagram_attribute_repository=attributes,
+        delete_diagram_relation_use_case=MagicMock(),
+        uow=uow,
+    )
+
+    try:
+        use_case.execute(DeleteDiagramClassCommand(class_id, "user-1"))
+        raise AssertionError("Expected cascade failure")
+    except RuntimeError as error:
+        assert str(error) == "cascade failed"
+
+    uow.rollback.assert_called_once_with()
+    uow.commit.assert_not_called()
 
 
 def test_delete_diagram_class(

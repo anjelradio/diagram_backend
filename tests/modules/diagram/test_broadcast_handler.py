@@ -7,6 +7,10 @@ from app.modules.diagram.infrastructure.realtime.broadcast_handler import (
     WebSocketBroadcastEventHandler,
     configure_broadcast_loop,
 )
+from app.modules.diagram.infrastructure.realtime.connection_manager import (
+    ClientSession,
+    ConnectionManager,
+)
 
 
 def test_broadcast_handler_without_loop() -> None:
@@ -52,3 +56,42 @@ def test_broadcast_handler_with_loop() -> None:
             )
 
     asyncio.run(_run())
+
+
+def test_agent_mutation_reaches_author_and_collaborators(monkeypatch) -> None:
+    async def run():
+        configure_broadcast_loop(asyncio.get_running_loop())
+
+        class Socket:
+            def __init__(self):
+                self.messages = []
+
+            async def send_json(self, payload):
+                self.messages.append(payload)
+
+        manager = ConnectionManager()
+        project_id = uuid4()
+        author_socket, collaborator_socket = Socket(), Socket()
+        manager.sessions[project_id] = [
+            ClientSession(author_socket, project_id, "user-author", "Author", "editor"),
+            ClientSession(collaborator_socket, project_id, "user-peer", "Peer", "editor"),
+        ]
+        monkeypatch.setattr(
+            "app.modules.diagram.infrastructure.realtime.broadcast_handler.connection_manager",
+            manager,
+        )
+        WebSocketBroadcastEventHandler().handle(
+            DiagramMutationEvent(
+                project_id=project_id,
+                sender_id="assistant",
+                operation_type="CREATE_CLASS",
+                data={"id": str(uuid4()), "name": "Producto"},
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert len(author_socket.messages) == 1
+        assert len(collaborator_socket.messages) == 1
+        assert author_socket.messages[0] == collaborator_socket.messages[0]
+        assert author_socket.messages[0]["sender_id"] == "assistant"
+
+    asyncio.run(run())

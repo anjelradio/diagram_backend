@@ -4,6 +4,12 @@ venv/
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
 .pytest_cache/
 .git/
+Dockerfile*
+.dockerignore
+*.log*
+coverage/
 dev.db

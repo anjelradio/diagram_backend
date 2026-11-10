@@ -2,7 +2,7 @@ from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.modules.diagram.application.services.diagram_relation_materializer import (
+from app.modules.diagram.domain.services.diagram_relation_materialization_policy import (
     MaterializationStrategy,
 )
 from app.modules.diagram.domain.enums.diagram_cardinality import DiagramCardinality

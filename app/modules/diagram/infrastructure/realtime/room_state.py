@@ -13,23 +13,34 @@ class ClassLock:
     expires_at: float
 
 
-class ProjectRoomState:
-    """Coordina bloqueos de clases con resolución first-come-first-served."""
+@dataclass
+class AgentComponentReservation:
+    project_id: UUID
+    message_id: UUID
+    sequence: int
+    component_type: str  # "class" | "relation"
+    component_id: UUID
+    activity_type: str  # "query" | "edit"
+    attribute_id: UUID | None = None
+    created_at: float = 0.0
+    updated_at: float = 0.0
+    expires_at: float = 0.0
 
-    def __init__(self, project_id: UUID, lock_ttl_seconds: float = 60.0) -> None:
+
+class ProjectRoomState:
+    """Coordina bloqueos de clases y reservas efímeras de componentes del agente."""
+
+    def __init__(
+        self,
+        project_id: UUID,
+        lock_ttl_seconds: float = 60.0,
+        reservation_ttl_seconds: float = 300.0,
+    ) -> None:
         self.project_id = project_id
         self.lock_ttl_seconds = lock_ttl_seconds
+        self.reservation_ttl_seconds = reservation_ttl_seconds
         self.class_locks: dict[UUID, ClassLock] = {}
-        self.agent_lock: dict[str, str] | None = None
-
-    def set_agent_lock(self, user_id: str, activity_id: UUID) -> None:
-        self.agent_lock = {"user_id": user_id, "activity_id": str(activity_id)}
-
-    def release_agent_lock(self, activity_id: UUID) -> bool:
-        if self.agent_lock is None or self.agent_lock["activity_id"] != str(activity_id):
-            return False
-        self.agent_lock = None
-        return True
+        self.agent_reservations: dict[tuple[UUID, str, UUID], AgentComponentReservation] = {}
 
     def acquire_lock(
         self,
@@ -85,3 +96,124 @@ class ProjectRoomState:
             }
             for lock in self.class_locks.values()
         ]
+
+    def reserve_component(
+        self,
+        *,
+        project_id: UUID,
+        message_id: UUID,
+        sequence: int,
+        component_type: str,
+        component_id: UUID,
+        activity_type: str,
+        attribute_id: UUID | None = None,
+        now: float | None = None,
+    ) -> AgentComponentReservation:
+        import time
+
+        current = time.monotonic() if now is None else now
+        self.check_expired_reservations(current)
+        key = (message_id, component_type, component_id)
+        existing = self.agent_reservations.get(key)
+        if existing is not None:
+            effective_activity = (
+                "edit"
+                if (existing.activity_type == "edit" or activity_type == "edit")
+                else "query"
+            )
+            if sequence < existing.sequence:
+                effective_attr_id = (
+                    existing.attribute_id if existing.attribute_id is not None else attribute_id
+                )
+                effective_sequence = existing.sequence
+            else:
+                effective_attr_id = (
+                    attribute_id if attribute_id is not None else existing.attribute_id
+                )
+                effective_sequence = sequence
+            existing.activity_type = effective_activity
+            existing.attribute_id = effective_attr_id
+            existing.sequence = effective_sequence
+            existing.updated_at = current
+            existing.expires_at = current + self.reservation_ttl_seconds
+            return existing
+
+        reservation = AgentComponentReservation(
+            project_id=project_id,
+            message_id=message_id,
+            sequence=sequence,
+            component_type=component_type,
+            component_id=component_id,
+            activity_type=activity_type,
+            attribute_id=attribute_id,
+            created_at=current,
+            updated_at=current,
+            expires_at=current + self.reservation_ttl_seconds,
+        )
+        self.agent_reservations[key] = reservation
+        return reservation
+
+    def release_message_reservations(
+        self, message_id: UUID
+    ) -> list[AgentComponentReservation]:
+        released = [
+            res
+            for key, res in list(self.agent_reservations.items())
+            if key[0] == message_id
+        ]
+        for res in released:
+            self.agent_reservations.pop(
+                (res.message_id, res.component_type, res.component_id), None
+            )
+        return released
+
+    def check_expired_reservations(
+        self, now: float | None = None
+    ) -> list[AgentComponentReservation]:
+        import time
+
+        current = time.monotonic() if now is None else now
+        expired = [
+            res
+            for res in self.agent_reservations.values()
+            if res.expires_at <= current
+        ]
+        for res in expired:
+            self.agent_reservations.pop(
+                (res.message_id, res.component_type, res.component_id), None
+            )
+        return expired
+
+    def has_active_reservations(self, now: float | None = None) -> bool:
+        self.check_expired_reservations(now)
+        return bool(self.agent_reservations)
+
+    def is_component_reserved(
+        self,
+        component_id: UUID,
+        component_type: str | None = None,
+        now: float | None = None,
+    ) -> bool:
+        self.check_expired_reservations(now)
+        return any(
+            res.component_id == component_id
+            and (component_type is None or res.component_type == component_type)
+            for res in self.agent_reservations.values()
+        )
+
+    def serialize_reservations(self, now: float | None = None) -> list[dict[str, object]]:
+        if now is not None:
+            self.check_expired_reservations(now)
+        return [
+            {
+                "project_id": str(res.project_id),
+                "message_id": str(res.message_id),
+                "sequence": res.sequence,
+                "component_type": res.component_type,
+                "component_id": str(res.component_id),
+                "activity_type": res.activity_type,
+                "attribute_id": str(res.attribute_id) if res.attribute_id is not None else None,
+            }
+            for res in self.agent_reservations.values()
+        ]
+

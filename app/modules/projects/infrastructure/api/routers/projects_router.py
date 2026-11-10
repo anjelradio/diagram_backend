@@ -276,22 +276,3 @@ def export_project(
     )
 
 
-@router.get(
-    "/{project_id}/assistant/activities",
-    status_code=status.HTTP_200_OK,
-    summary="Listar historial de actividades del asistente (alias en /api/projects)",
-)
-def list_project_activities_alias(
-    project_id: UUID,
-    current_user: CurrentUser = None,
-    uow: UoWDep = None,
-):
-    from app.modules.assistant.infrastructure.api.routers.assistant_router import (
-        list_project_activities,
-    )
-
-    return list_project_activities(
-        project_id=project_id,
-        current_user=current_user,
-        uow=uow,
-    )

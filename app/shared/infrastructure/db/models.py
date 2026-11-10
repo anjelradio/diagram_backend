@@ -22,3 +22,7 @@ from app.modules.diagram.infrastructure.persistence.models.diagram_class_model i
 from app.modules.diagram.infrastructure.persistence.models.diagram_attribute_model import DiagramAttributeModel
 from app.modules.diagram.infrastructure.persistence.models.diagram_relation_model import DiagramRelationModel
 
+# Módulo Assistant
+from app.modules.assistant.infrastructure.persistence.models.agent_message_model import AgentMessageModel
+from app.modules.assistant.infrastructure.persistence.models.agent_continuation_model import AgentContinuationModel
+

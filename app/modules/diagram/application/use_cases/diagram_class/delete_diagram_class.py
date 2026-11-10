@@ -17,7 +17,7 @@ from app.modules.diagram.domain.repositories.diagram_class_repository import (
 from app.modules.diagram.domain.repositories.diagram_relation_repository import (
     DiagramRelationRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramClassDeletedEvent
 
 
@@ -27,6 +27,7 @@ class DeleteDiagramClassCommand:
 
     class_id: UUID
     user_id: str
+    event_sender_id: str | None = None
 
 
 class DeleteDiagramClassUseCase:
@@ -39,7 +40,7 @@ class DeleteDiagramClassUseCase:
         diagram_relation_repository: DiagramRelationRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
         delete_diagram_relation_use_case: DeleteDiagramRelationUseCase,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_class_repository = diagram_class_repository
@@ -61,29 +62,43 @@ class DeleteDiagramClassUseCase:
 
         self.access_policy.ensure_write_access(existing.project_id, command.user_id)
 
-        # 1. Eliminar en cascada todas las relaciones en las que participa (origen, destino o puente)
-        associated_relations = self.diagram_relation_repository.list_by_class_id(
-            existing.id
-        )
-        for rel in associated_relations:
-            self.delete_diagram_relation_use_case.execute(
-                DeleteDiagramRelationCommand(
-                    relation_id=rel.id,
-                    user_id=command.user_id,
+        try:
+            self._delete_associated_relations(
+                existing.id, command.user_id, command.event_sender_id
+            )
+            self._delete_class_record(existing.id)
+            self.uow.publish_event(
+                DiagramClassDeletedEvent(
+                    project_id=existing.project_id,
+                    sender_id=command.event_sender_id or command.user_id,
+                    data={"class_id": str(existing.id)},
                 )
             )
+            self.uow.commit()
+        except Exception:
+            self.uow.rollback()
+            raise
 
-        # 2. Si la clase aún existe (no era una clase puente ya eliminada en el paso 1),
-        # eliminar sus atributos restantes y la clase
-        still_exists = self.diagram_class_repository.find_by_id(existing.id)
-        if still_exists is not None:
-            attrs = self.diagram_attribute_repository.list_by_class_id(still_exists.id)
-            for attr in attrs:
-                self.diagram_attribute_repository.delete(attr.id)
-            self.diagram_class_repository.delete(still_exists.id)
+    def _delete_associated_relations(
+        self, class_id: UUID, user_id: str, event_sender_id: str | None
+    ) -> None:
+        """Elimina relaciones asociadas sin confirmar la unidad de trabajo compartida."""
+        relations = self.diagram_relation_repository.list_by_class_id(class_id)
+        for relation in relations:
+            self.delete_diagram_relation_use_case.execute(
+                DeleteDiagramRelationCommand(
+                    relation_id=relation.id,
+                    user_id=user_id,
+                    event_sender_id=event_sender_id,
+                ),
+                commit_transaction=False,
+            )
 
-        self.uow.publish_event(DiagramClassDeletedEvent(
-            project_id=existing.project_id, sender_id=command.user_id,
-            data={"class_id": str(existing.id)},
-        ))
-        self.uow.commit()
+    def _delete_class_record(self, class_id: UUID) -> None:
+        """Elimina atributos y clase cuando otra cascada no la retiró ya."""
+        diagram_class = self.diagram_class_repository.find_by_id(class_id)
+        if diagram_class is None:
+            return
+        for attribute in self.diagram_attribute_repository.list_by_class_id(class_id):
+            self.diagram_attribute_repository.delete(attribute.id)
+        self.diagram_class_repository.delete(class_id)

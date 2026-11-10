@@ -4,6 +4,9 @@ from uuid import UUID
 from app.modules.diagram.application.services.diagram_access_policy import (
     DiagramAccessPolicy,
 )
+from app.modules.diagram.application.use_cases.diagram_relation.realtime_projection import (
+    class_snapshot,
+)
 from app.modules.diagram.domain.enums.diagram_relation_type import (
     DiagramRelationType,
 )
@@ -16,7 +19,7 @@ from app.modules.diagram.domain.repositories.diagram_class_repository import (
 from app.modules.diagram.domain.repositories.diagram_relation_repository import (
     DiagramRelationRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramRelationDeletedEvent
 
 
@@ -26,6 +29,7 @@ class DeleteDiagramRelationCommand:
 
     relation_id: UUID
     user_id: str
+    event_sender_id: str | None = None
 
 
 class DeleteDiagramRelationUseCase:
@@ -37,7 +41,7 @@ class DeleteDiagramRelationUseCase:
         diagram_relation_repository: DiagramRelationRepository,
         diagram_class_repository: DiagramClassRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_relation_repository = diagram_relation_repository
@@ -45,7 +49,12 @@ class DeleteDiagramRelationUseCase:
         self.diagram_attribute_repository = diagram_attribute_repository
         self.uow = uow
 
-    def execute(self, command: DeleteDiagramRelationCommand) -> None:
+    def execute(
+        self,
+        command: DeleteDiagramRelationCommand,
+        *,
+        commit_transaction: bool = True,
+    ) -> None:
         """Elimina físicamente la relación y revierte/elimina sus artefactos derivados."""
         relation = self.diagram_relation_repository.find_by_id(command.relation_id)
         if relation is None:
@@ -56,6 +65,8 @@ class DeleteDiagramRelationUseCase:
 
         # 1. Limpieza de atributos derivados según la estrategia de materialización
         bridge_class_id_to_delete: UUID | None = None
+        affected_class_ids: set[UUID] = set()
+        removed_attribute_ids: list[str] = []
 
         if relation.is_many_to_many or relation.bridge_class_id is not None:
             # Caso BRIDGE_CLASS: eliminar todos los atributos de la clase puente
@@ -77,13 +88,11 @@ class DeleteDiagramRelationUseCase:
                 if attr.is_primary_key:
                     attr.revert_shared_primary_key()
                     self.diagram_attribute_repository.save(attr)
+                    affected_class_ids.add(attr.class_id)
                 else:
                     self.diagram_attribute_repository.delete(attr.id)
                     affected_class_ids.add(attr.class_id)
-            affected_class_ids: set[UUID] = set()
-            for attr in fk_attrs:
-                self.diagram_attribute_repository.delete(attr.id)
-                affected_class_ids.add(attr.class_id)
+                    removed_attribute_ids.append(str(attr.id))
 
             # Compactar posiciones en cada clase receptora afectada
             for class_id in affected_class_ids:
@@ -102,8 +111,30 @@ class DeleteDiagramRelationUseCase:
         if bridge_class_id_to_delete is not None:
             self.diagram_class_repository.delete(bridge_class_id_to_delete)
 
+        self.uow.flush()
+        materialized_classes = []
+        for class_id in sorted(affected_class_ids, key=str):
+            affected_class = self.diagram_class_repository.find_by_id(class_id)
+            if affected_class is not None:
+                materialized_classes.append(
+                    class_snapshot(
+                        affected_class,
+                        self.diagram_attribute_repository.list_by_class_id(class_id),
+                    )
+                )
+
         self.uow.publish_event(DiagramRelationDeletedEvent(
-            project_id=relation.project_id, sender_id=command.user_id,
-            data={"relation_id": str(relation.id)},
+            project_id=relation.project_id, sender_id=command.event_sender_id or command.user_id,
+            data={
+                "relation_id": str(relation.id),
+                "materialized_classes": materialized_classes,
+                "removed_class_ids": (
+                    [str(bridge_class_id_to_delete)]
+                    if bridge_class_id_to_delete is not None
+                    else []
+                ),
+                "removed_attribute_ids": removed_attribute_ids,
+            },
         ))
-        self.uow.commit()
+        if commit_transaction:
+            self.uow.commit()

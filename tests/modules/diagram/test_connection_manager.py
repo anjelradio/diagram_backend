@@ -223,41 +223,6 @@ def test_connection_manager_disconnect_is_idempotent() -> None:
     asyncio.run(_run())
 
 
-def test_connection_manager_broadcasts_correlated_agent_lock_and_finish() -> None:
-    async def _run() -> None:
-        manager = ConnectionManager()
-        project_id = uuid4()
-        activity_id = uuid4()
-        ws = AsyncMock(spec=WebSocket)
-        session = ClientSession(
-            websocket=ws,
-            project_id=project_id,
-            user_id="editor",
-            user_name="Editor",
-            role="EDITOR",
-        )
-        await manager.connect(session)
-        ws.send_json.reset_mock()
-
-        await manager.broadcast_agent_lock(project_id, "owner", activity_id)
-        ws.send_json.assert_awaited_once_with(
-            {"type": "agent_lock", "user_id": "owner", "activity_id": str(activity_id)}
-        )
-        ws.send_json.reset_mock()
-
-        await manager.broadcast_agent_finished(project_id, "owner", activity_id, "FINISHED")
-        ws.send_json.assert_awaited_once_with(
-            {
-                "type": "agent_finished",
-                "user_id": "owner",
-                "activity_id": str(activity_id),
-                "state": "FINISHED",
-            }
-        )
-
-    asyncio.run(_run())
-
-
 def test_connection_manager_revalidate_access_revocation_closes_1008(monkeypatch) -> None:
     async def _run() -> None:
         manager = ConnectionManager()

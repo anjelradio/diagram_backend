@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#f7f9fc"/>
+  <text x="800" y="82" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="30" font-weight="700" fill="#172033">ORDER COMPOSITION MODEL</text>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172033">
+    <rect x="145" y="220" width="500" height="430" rx="14" fill="#fff" stroke="#53657d" stroke-width="3"/>
+    <path d="M145 282H645" stroke="#53657d" stroke-width="3"/>
+    <text x="395" y="260" text-anchor="middle" font-size="28" font-weight="700">PurchaseOrder</text>
+    <text x="180" y="332" font-size="23">id : UUID «PK»</text>
+    <text x="180" y="382" font-size="23">placed_at : TIMESTAMP</text>
+    <text x="180" y="432" font-size="23">status : TEXT</text>
+    <text x="180" y="482" font-size="23">total : DECIMAL</text>
+
+    <rect x="955" y="220" width="500" height="430" rx="14" fill="#fff" stroke="#53657d" stroke-width="3"/>
+    <path d="M955 282H1455" stroke="#53657d" stroke-width="3"/>
+    <text x="1205" y="260" text-anchor="middle" font-size="28" font-weight="700">OrderLine</text>
+    <text x="990" y="332" font-size="23">id : UUID «PK»</text>
+    <text x="990" y="382" font-size="23">quantity : INTEGER</text>
+    <text x="990" y="432" font-size="23">unit_price : DECIMAL</text>
+    <text x="990" y="482" font-size="23">note : TEXT</text>
+    <text x="990" y="532" font-size="23">order_id : UUID «FK»</text>
+
+    <path d="M645 430H955" stroke="#34445c" stroke-width="4"/>
+    <path d="M655 419L666 430L655 441L644 430Z" fill="#34445c" stroke="#34445c" stroke-width="2"/>
+    <text x="690" y="405" font-size="22" font-weight="700">1</text>
+    <text x="875" y="405" font-size="22" font-weight="700">1..*</text>
+    <text x="800" y="472" text-anchor="middle" font-size="19" fill="#5b687a">contains</text>
+  </g>
+</svg>

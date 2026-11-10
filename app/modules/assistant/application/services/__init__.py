@@ -1,0 +1,100 @@
+"""Servicios del módulo asistente organizados por responsabilidad."""
+
+from app.modules.assistant.application.services.planning import (
+    ActionPlanner,
+    AgentOrchestrator,
+    FINAL_PROMPT,
+    IMAGE_PROMPT,
+    PLANNER_PROMPT,
+    TOOL_PROMPT,
+    VISUAL_EVIDENCE_PROMPT,
+    VISUAL_INTENT_PROMPT,
+)
+from app.modules.assistant.application.services.execution import (
+    ActivityProgress,
+    AgentToolActorContext,
+    OperationLedger,
+    PlanExecutor,
+    PlanProgress,
+    ProgressReporter,
+    RegisteredTool,
+    ToolHandler,
+    ToolRegistry,
+)
+from app.modules.assistant.application.services.diagram import (
+    AgentConversationTools,
+    DIAGRAM_MUTATION_TOOL,
+    DiagramAttributeTools,
+    DiagramClassTools,
+    DiagramMutationTools,
+    DiagramReadTools,
+    DiagramRelationTools,
+    SEARCH_PROJECT_CONVERSATION_TOOL,
+    validate_actions,
+)
+from app.modules.assistant.application.services.visual import (
+    VisualEvidence,
+    VisualEvidenceExtractor,
+    VisualIntent,
+    VisualIntentAnalyzer,
+    create_visual_clarification,
+    is_explicit_deletion_confirmation,
+    is_valid_visual_clarification,
+    normalize_visual_diagram,
+    parse_visual_evidence,
+    parse_visual_intent,
+)
+from app.modules.assistant.application.services.context_builder import ContextBuilder
+from app.modules.assistant.application.services.memory_compactor import MemoryCompactor
+from app.modules.assistant.application.services.token_estimator import TokenEstimator
+from app.modules.assistant.application.services.agent_activity_reporter import AgentActivityReporter
+from app.modules.assistant.application.services.agent_trace import (
+    bind_agent_message,
+    current_agent_message_id,
+    reset_agent_message,
+    trace_agent_message,
+)
+
+__all__ = [
+    "ActionPlanner",
+    "ActivityProgress",
+    "AgentActivityReporter",
+    "AgentConversationTools",
+    "AgentOrchestrator",
+    "AgentToolActorContext",
+    "ContextBuilder",
+    "DIAGRAM_MUTATION_TOOL",
+    "DiagramAttributeTools",
+    "DiagramClassTools",
+    "DiagramMutationTools",
+    "DiagramReadTools",
+    "DiagramRelationTools",
+    "FINAL_PROMPT",
+    "MemoryCompactor",
+    "OperationLedger",
+    "PLANNER_PROMPT",
+    "PlanExecutor",
+    "PlanProgress",
+    "ProgressReporter",
+    "RegisteredTool",
+    "SEARCH_PROJECT_CONVERSATION_TOOL",
+    "TOOL_PROMPT",
+    "TokenEstimator",
+    "ToolHandler",
+    "ToolRegistry",
+    "VisualEvidence",
+    "VisualEvidenceExtractor",
+    "VisualIntent",
+    "VisualIntentAnalyzer",
+    "bind_agent_message",
+    "create_visual_clarification",
+    "current_agent_message_id",
+    "is_explicit_deletion_confirmation",
+    "is_valid_visual_clarification",
+    "normalize_visual_diagram",
+    "parse_visual_evidence",
+    "parse_visual_intent",
+    "reset_agent_message",
+    "trace_agent_message",
+    "validate_actions",
+]

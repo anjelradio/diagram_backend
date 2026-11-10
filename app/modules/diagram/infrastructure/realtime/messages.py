@@ -60,10 +60,9 @@ def parse_client_message(payload: object) -> ClientIncomingMessage:
 def presence_snapshot(
     sessions: list[dict[str, object]],
     locks: list[dict[str, object]],
-    agent_lock: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Construye el mensaje de presencia inicial de una sala."""
-    return {"type": "presence_snapshot", "peers": sessions, "class_locks": locks, "agent_lock": agent_lock}
+    return {"type": "presence_snapshot", "peers": sessions, "class_locks": locks}
 
 
 def diagram_mutation(operation_type: str, data: dict[str, object], sender_id: str) -> dict[str, object]:

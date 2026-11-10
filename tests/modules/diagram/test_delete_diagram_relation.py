@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -8,6 +9,43 @@ from app.modules.projects.infrastructure.persistence.models.project_model import
     ProjectModel,
 )
 from tests.modules.diagram.conftest import create_test_attribute, create_test_class
+
+
+def test_delete_relation_restores_shared_primary_key_without_deleting_it():
+    from app.modules.diagram.application.use_cases.diagram_relation.delete_diagram_relation import (
+        DeleteDiagramRelationCommand,
+        DeleteDiagramRelationUseCase,
+    )
+
+    relation_id = uuid.uuid4()
+    class_id = uuid.uuid4()
+    relation = MagicMock(
+        id=relation_id,
+        project_id=uuid.uuid4(),
+        is_many_to_many=False,
+        bridge_class_id=None,
+    )
+    shared_pk = MagicMock(id=uuid.uuid4(), class_id=class_id, is_primary_key=True)
+    relations = MagicMock()
+    relations.find_by_id.return_value = relation
+    attributes = MagicMock()
+    attributes.list_by_relation_id.return_value = [shared_pk]
+    attributes.list_by_class_id.return_value = [shared_pk]
+    uow = MagicMock()
+    use_case = DeleteDiagramRelationUseCase(
+        access_policy=MagicMock(),
+        diagram_relation_repository=relations,
+        diagram_class_repository=MagicMock(),
+        diagram_attribute_repository=attributes,
+        uow=uow,
+    )
+
+    use_case.execute(DeleteDiagramRelationCommand(relation_id, "user-1"))
+
+    shared_pk.revert_shared_primary_key.assert_called_once_with()
+    attributes.save.assert_called_once_with(shared_pk)
+    attributes.delete.assert_not_called()
+    uow.commit.assert_called_once_with()
 
 
 def test_delete_diagram_relation_and_cascades(

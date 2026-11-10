@@ -22,6 +22,7 @@ class RenameDiagramRelationCommand:
     relation_id: UUID
     user_id: str
     name: str
+    event_sender_id: str | None = None
 
 
 class RenameDiagramRelationUseCase:
@@ -49,7 +50,7 @@ class RenameDiagramRelationUseCase:
         existing.rename(clean_name)
         self.diagram_relation_repository.save(existing)
         self.uow.publish_event(DiagramRelationRenamedEvent(
-            project_id=existing.project_id, sender_id=command.user_id,
+            project_id=existing.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"relation_id": str(existing.id), "name": existing.name},
         ))
         self.uow.commit()

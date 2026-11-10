@@ -17,7 +17,7 @@ from app.modules.diagram.domain.repositories.diagram_attribute_repository import
 from app.modules.diagram.domain.repositories.diagram_class_repository import (
     DiagramClassRepository,
 )
-from app.shared.infrastructure.unit_of_work import SqlModelUnitOfWork
+from app.shared.application.unit_of_work import UnitOfWorkPort
 from app.modules.diagram.domain.events.diagram_events import DiagramAttributeCreatedEvent
 
 
@@ -32,6 +32,7 @@ class CreateDiagramAttributeCommand:
     position: int
     data_type: DiagramAttributeDataType | None = None
     is_nullable: bool = True
+    event_sender_id: str | None = None
 
 
 class CreateDiagramAttributeUseCase:
@@ -42,7 +43,7 @@ class CreateDiagramAttributeUseCase:
         access_policy: DiagramAccessPolicy,
         diagram_class_repository: DiagramClassRepository,
         diagram_attribute_repository: DiagramAttributeRepository,
-        uow: SqlModelUnitOfWork,
+        uow: UnitOfWorkPort,
     ) -> None:
         self.access_policy = access_policy
         self.diagram_class_repository = diagram_class_repository
@@ -111,7 +112,7 @@ class CreateDiagramAttributeUseCase:
         # 7. Persistir y confirmar transacción
         self.diagram_attribute_repository.save(new_attr)
         self.uow.publish_event(DiagramAttributeCreatedEvent(
-            project_id=diagram_class.project_id, sender_id=command.user_id,
+            project_id=diagram_class.project_id, sender_id=command.event_sender_id or command.user_id,
             data={"id": str(new_attr.id), "class_id": str(new_attr.class_id), "name": new_attr.name,
                   "data_type": new_attr.data_type.value if new_attr.data_type else None,
                   "position": new_attr.position, "is_primary_key": new_attr.is_primary_key,

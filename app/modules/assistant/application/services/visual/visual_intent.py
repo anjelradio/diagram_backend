@@ -86,7 +86,7 @@ class VisualIntentAnalyzer:
                 purpose="visual_intent",
                 max_output_tokens=900,
                 response_format="json_object",
-                enable_reasoning=False,
+                enable_reasoning=True,
             )
         )
         return parse_visual_intent(result.text)

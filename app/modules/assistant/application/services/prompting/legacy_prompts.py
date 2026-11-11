@@ -142,8 +142,7 @@ resaltada en rojo»), conserva ese descriptor en visual_request para que visión
 inventes su nombre antes de ver la imagen. No conviertas el contenido de una imagen que no has
 visto en hechos. Dentro de cada categoría de scope usa solo all, none, lista de nombres o
 {"include": ..., "exclude": ...}; nunca pongas include/exclude directamente en scope.
-Expresa las tres categorías explícitamente: si piden clases con atributos sin mencionar
-relaciones, usa relations=none. Separa objetivos textuales que puedan
+Expresa las tres categorías explícitamente: si piden crear una clase específica de la imagen (ej: «crea la clase producto de la imagen»), incluye esa clase en classes, con attributes=all implícitamente, y relations=none salvo que mencionen relaciones. Si piden una clase y sus relaciones o lo conectado a ella (ej: «crea producto y sus relaciones de la imagen»), usa classes=[nombre], attributes=all y relations=all. Si piden recrear o importar todo el diagrama de la imagen, usa classes=all, attributes=all, relations=all. Separa objetivos textuales que puedan
 ejecutarse independientemente de la imagen."""
 
 VISUAL_EVIDENCE_PROMPT = """Eres un extractor visual de diagramas de clases UML/ERD. Devuelve únicamente JSON:

@@ -35,6 +35,7 @@ from app.modules.assistant.application.services.diagram import (
 from app.modules.assistant.application.services.visual import (
     VisualEvidence,
     VisualEvidenceExtractor,
+    VisualGapResolver,
     VisualIntent,
     VisualIntentAnalyzer,
     create_visual_clarification,
@@ -84,6 +85,7 @@ __all__ = [
     "ToolRegistry",
     "VisualEvidence",
     "VisualEvidenceExtractor",
+    "VisualGapResolver",
     "VisualIntent",
     "VisualIntentAnalyzer",
     "bind_agent_message",

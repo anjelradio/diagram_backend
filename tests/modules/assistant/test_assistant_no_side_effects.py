@@ -7,6 +7,8 @@ def test_diagram_dependencies_are_confined_to_authorized_agent_adapters():
         # Parses provider output against Diagram's enum contracts; it does not
         # invoke Diagram use cases or repositories directly.
         "application/services/visual/visual_contracts.py",
+        "application/services/visual/visual_gap_resolver.py",
+        "application/services/audit/audit_query_service.py",
         "application/services/diagram/diagram_read_tools.py",
         "application/services/diagram/diagram_mutation_tools.py",
         "application/services/diagram/diagram_tool_schemas.py",

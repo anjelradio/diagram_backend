@@ -192,7 +192,38 @@ class QwenAiProvider:
                 response.text,
             )
 
+        if response.status_code == 400 and "restricted to True" in response.text and payload.get("enable_thinking") is False:
+            logger.info(
+                "Qwen model %s requires enable_thinking=True; retrying automatically with enable_thinking=True (message_id=%s)",
+                model,
+                message_id,
+            )
+            payload["enable_thinking"] = True
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(self.settings.QWEN_TIMEOUT_SECONDS),
+                    transport=self._transport,
+                    follow_redirects=False,
+                ) as client:
+                    response = await client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+            except Exception as exc:
+                logger.warning("Retry with enable_thinking=True failed: %s", exc)
+
         if response.status_code < 200 or response.status_code >= 300:
+            logger.warning(
+                "Qwen request failed with HTTP status (message_id=%s, inference_id=%s, status=%s, body=%s)",
+                message_id,
+                inference_id,
+                response.status_code,
+                response.text[:500],
+            )
             raise AiProviderUnavailableException(
                 reason=AiProviderUnavailableReason.HTTP_ERROR,
                 status_code=response.status_code,

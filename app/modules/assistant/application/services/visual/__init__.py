@@ -17,6 +17,9 @@ from app.modules.assistant.application.services.visual.visual_diagram_normalizer
 from app.modules.assistant.application.services.visual.visual_evidence import (
     VisualEvidenceExtractor,
 )
+from app.modules.assistant.application.services.visual.visual_gap_resolver import (
+    VisualGapResolver,
+)
 from app.modules.assistant.application.services.visual.visual_intent import (
     VisualIntentAnalyzer,
 )
@@ -24,6 +27,7 @@ from app.modules.assistant.application.services.visual.visual_intent import (
 __all__ = [
     "VisualEvidence",
     "VisualEvidenceExtractor",
+    "VisualGapResolver",
     "VisualIntent",
     "VisualIntentAnalyzer",
     "create_visual_clarification",

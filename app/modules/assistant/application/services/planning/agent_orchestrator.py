@@ -42,6 +42,9 @@ from app.modules.assistant.application.services.visual.visual_diagram_normalizer
 from app.modules.assistant.application.services.visual.visual_evidence import (
     VisualEvidenceExtractor,
 )
+from app.modules.assistant.application.services.visual.visual_gap_resolver import (
+    VisualGapResolver,
+)
 from app.modules.assistant.application.services.visual.visual_intent import (
     VisualIntentAnalyzer,
 )
@@ -64,6 +67,7 @@ class AgentOrchestrator:
         plan_executor: PlanExecutor | None = None,
         visual_intent_analyzer: VisualIntentAnalyzer | None = None,
         visual_evidence_extractor: VisualEvidenceExtractor | None = None,
+        visual_gap_resolver: VisualGapResolver | None = None,
         prompt_composer: PromptComposer | None = None,
     ) -> None:
         self.ai_provider = ai_provider
@@ -75,6 +79,9 @@ class AgentOrchestrator:
             ai_provider, prompt_composer=prompt_composer
         )
         self.visual_evidence_extractor = visual_evidence_extractor or VisualEvidenceExtractor(
+            ai_provider, prompt_composer=prompt_composer
+        )
+        self.visual_gap_resolver = visual_gap_resolver or VisualGapResolver(
             ai_provider, prompt_composer=prompt_composer
         )
 
@@ -321,6 +328,13 @@ class AgentOrchestrator:
                 completed=True,
             )
         normalized_evidence = normalize_visual_diagram(intent, evidence)
+        if self.visual_gap_resolver is not None:
+            intent, normalized_evidence = await self.visual_gap_resolver.resolve(
+                prompt=context.prompt,
+                intent=intent,
+                evidence=evidence,
+                normalized_evidence=normalized_evidence,
+            )
         if normalized_evidence["uncertainties"] and intent.mode == "mutate":
             questions = "\n".join(
                 f"- {item}" for item in normalized_evidence["uncertainties"][:5]

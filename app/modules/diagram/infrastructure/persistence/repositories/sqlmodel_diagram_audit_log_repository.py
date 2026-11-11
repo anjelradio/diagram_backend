@@ -67,7 +67,9 @@ class SQLModelDiagramAuditLogRepository(DiagramAuditLogRepository):
         actor_type: DiagramAuditActorType | None = None,
         entity_type: DiagramAuditEntityType | None = None,
         entity_id: UUID | None = None,
+        entity_name: str | None = None,
         parent_class_id: UUID | None = None,
+        parent_class_name: str | None = None,
         action: DiagramAuditAction | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -94,8 +96,20 @@ class SQLModelDiagramAuditLogRepository(DiagramAuditLogRepository):
             stmt = stmt.where(DiagramAuditLogModel.entity_type == val)
         if entity_id:
             stmt = stmt.where(DiagramAuditLogModel.entity_id == entity_id)
+        if entity_name:
+            clean_entity = entity_name.strip()
+            if clean_entity:
+                stmt = stmt.where(
+                    DiagramAuditLogModel.entity_name.ilike(f"%{clean_entity}%")
+                )
         if parent_class_id:
             stmt = stmt.where(DiagramAuditLogModel.parent_class_id == parent_class_id)
+        if parent_class_name:
+            clean_parent = parent_class_name.strip()
+            if clean_parent:
+                stmt = stmt.where(
+                    DiagramAuditLogModel.parent_class_name.ilike(f"%{clean_parent}%")
+                )
         if action:
             val = action.value if hasattr(action, "value") else str(action)
             stmt = stmt.where(DiagramAuditLogModel.action == val)

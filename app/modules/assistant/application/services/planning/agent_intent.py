@@ -99,6 +99,36 @@ _EXPLICIT_BATCH = re.compile(
     re.IGNORECASE,
 )
 
+_AUDIT_AUTHORSHIP_PATTERNS = re.compile(
+    r"\b(qui[eé]n|qui[eé]nes|qu[eé]\s+usuario|cu[aá]l\s+usuario|qu[eé]\s+persona)\s+"
+    r"(cre[oó]|hizo|modific[oó]|borr[oó]|elimin[oó]|actualiz[oó]|a[ñn]adi[oó]|agreg[oó]|movi[oó]|cambi[oó]|renombr[oó]|realiz[oó]|toc[oó])\b",
+    re.IGNORECASE,
+)
+_AUDIT_ACTIVITY_PATTERNS = re.compile(
+    r"\b(qu[eé])\s+(hizo|modific[oó]|cambi[oó]|agreg[oó]|a[ñn]adi[oó]|elimin[oó]|borr[oó]|actualiz[oó]|cre[oó]|realiz[oó])\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)\b",
+    re.IGNORECASE,
+)
+_AUDIT_GENERAL_PATTERNS = re.compile(
+    r"\b(?:qu[eé]\s+(?:modificaciones|cambios|acciones)|qui[eé]nes\s+(?:estuvieron|han\s+estado)\s+trabajando|"
+    r"qu[eé]\s+cambios\s+ha\s+tenido|historial\s+de\s+(?:cambios|auditor[ií]a|modificaciones)|"
+    r"bit[aá]cora\s+de\s+(?:cambios|auditor[ií]a|modificaciones)|qui[eé]n\s+(?:ha\s+modificado|ha\s+creado|ha\s+borrado|ha\s+eliminado))\b",
+    re.IGNORECASE,
+)
+
+
+def is_audit_query(prompt: str) -> bool:
+    """Detecta si la solicitud es una consulta sobre la bitácora de auditoría histórica."""
+    clean = prompt.strip()
+    if not clean:
+        return False
+    if _AUDIT_AUTHORSHIP_PATTERNS.search(clean):
+        return True
+    if _AUDIT_ACTIVITY_PATTERNS.search(clean):
+        return True
+    if _AUDIT_GENERAL_PATTERNS.search(clean):
+        return True
+    return False
+
 
 def is_neon_sync_prompt(prompt: str) -> bool:
     """Detecta si la orden solicita sincronizar, migrar o desplegar la base de datos en Neon."""
@@ -181,6 +211,19 @@ def classify_agent_intent(prompt: str) -> AgentIntent:
     # 4. Preguntas o dudas hipotéticas
     is_question = "?" in cleaned or "¿" in cleaned
     is_hypothetical = bool(_HYPOTHETICAL_OR_DOUBT_PATTERNS.search(cleaned))
+
+    # 4.1. Consultas de autoría y auditoría histórica (inmunización mutativa estricta)
+    if is_audit_query(cleaned):
+        return AgentIntent(
+            action="query",
+            target=cleaned,
+            scope="audit",
+            certainty="high",
+            requires_mutation=False,
+            is_question=True,
+            raw_prompt=prompt,
+        )
+
     has_compound_order = bool(
         _SEQUENCE_MARKERS.search(cleaned)
         or re.match(
@@ -283,6 +326,8 @@ def classify_agent_intent(prompt: str) -> AgentIntent:
 
 def has_direct_mutation_command(prompt: str) -> bool:
     """Determina si hay una orden de mutación imperativa explícita no negada."""
+    if is_audit_query(prompt):
+        return False
     if _NEGATION_PATTERNS.search(prompt) or _CITED_EXAMPLE_PATTERNS.search(prompt):
         return False
     return bool(

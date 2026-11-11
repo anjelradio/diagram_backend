@@ -24,6 +24,7 @@ from app.modules.assistant.application.ports.agent_activity_publisher import Age
 from app.modules.assistant.application.services.planning.action_planner import ActionPlanner
 from app.modules.assistant.application.services.planning.agent_intent import (
     classify_agent_intent,
+    is_audit_query,
     is_neon_sync_prompt,
 )
 from app.modules.assistant.application.services.agent_trace import current_agent_message_id
@@ -164,6 +165,8 @@ def _has_pending_mutation_text(text: str) -> bool:
 
 
 def _is_task_inherently_mutative(task: dict[str, Any], objective: str) -> bool:
+    if is_audit_query(objective) or is_audit_query(str(task.get("objective", ""))):
+        return False
     if task.get("kind") == "mutation":
         return True
     obj_lower = objective.lower()
@@ -994,20 +997,35 @@ class PlanExecutor:
             )
         )
         if not requires_mutation:
+            is_audit_intent = (
+                is_audit_query(objective)
+                or is_audit_query(context.prompt)
+                or any(
+                    w in objective.lower() or w in context.prompt.lower()
+                    for w in ("quién", "quien", "quiénes", "quienes", "historial", "auditoría", "auditoria", "bitácora", "bitacora")
+                )
+            )
             is_query_intent = any(
                 w in objective.lower() or w in context.prompt.lower()
                 for w in ("list", "listar", "dime", "mostrar", "ver", "consultar", "pendientes", "tareas")
             ) and not is_mut
-            query_directive = (
-                "Utiliza la herramienta `list_notion_tasks` para consultar las tareas del usuario en Notion. "
-                "Proporciona la lista clara en Markdown sin tablas."
-                if (is_notion_task and is_query_intent)
-                else (
+            if is_audit_intent and self.tool_registry.has("query_diagram_audit_logs"):
+                query_directive = (
+                    "Esta tarea es de consulta de auditoría histórica. Consulta la bitácora mediante `query_diagram_audit_logs`. "
+                    "NO modifiques el lienzo ni invoques herramientas de mutación (`apply_diagram_changes`). "
+                    "Agrupa los resultados por fecha y por clase, usando viñetas y listas indentadas SIN tablas markdown."
+                )
+            elif is_notion_task and is_query_intent:
+                query_directive = (
+                    "Utiliza la herramienta `list_notion_tasks` para consultar las tareas del usuario en Notion. "
+                    "Proporciona la lista clara en Markdown sin tablas."
+                )
+            else:
+                query_directive = (
                     "Esta tarea es exclusivamente de consulta u orientación conceptual. "
                     "NO modifiques el diagrama ni invoques herramientas de mutación (`apply_diagram_changes`). "
                     "Proporciona tu respuesta directamente como texto en Markdown."
                 )
-            )
             messages.append(
                 AiMessage(
                     role="user",

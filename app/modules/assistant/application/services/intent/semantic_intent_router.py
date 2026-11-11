@@ -15,6 +15,7 @@ from app.modules.assistant.application.ports.providers.ai_provider import (
     ModelRole,
 )
 from app.modules.assistant.application.services.planning.agent_intent import (
+    is_audit_query,
     is_neon_sync_prompt,
 )
 
@@ -29,6 +30,7 @@ class SemanticCategory(StrEnum):
     COMPOUND_ACTION = "COMPOUND_ACTION"
     NEEDS_MORE_CONTEXT = "NEEDS_MORE_CONTEXT"
     CONCEPTUAL_CONSULTATION = "CONCEPTUAL_CONSULTATION"
+    AUDIT_QUERY = "AUDIT_QUERY"
     DECLINE_OR_CANCEL = "DECLINE_OR_CANCEL"
 
 
@@ -47,7 +49,7 @@ class SemanticTurnDecision:
 
 _ROUTER_SYSTEM_PROMPT = """Eres el Enrutador Semántico de Intención y Desambiguación Contextual de un asistente especializado en modelado de diagramas UML.
 
-Tu misión es analizar el mensaje del usuario considerando el contexto del proyecto y el historial reciente de conversación, y clasificarlo en una de 6 categorías con salida JSON estructurada estricta:
+Tu misión es analizar el mensaje del usuario considerando el contexto del proyecto y el historial reciente de conversación, y clasificarlo en una de 7 categorías con salida JSON estructurada estricta:
 
 CATEGORÍAS:
 1. "DIRECT_ACTION": El usuario da una instrucción de acción explícita y autosuficiente (crear, editar o eliminar clases, atributos o relaciones) que NO depende de resolver pronombres o anáforas de turnos previos.
@@ -109,7 +111,13 @@ CATEGORÍAS:
    - requires_mutation: false
    - resolved_goal: La consulta a responder directamente en texto Markdown (SIN tablas).
 
-6. "DECLINE_OR_CANCEL": El usuario indica explícitamente cancelar, declinar o descartar la sugerencia o solicitud pendiente ("cancela eso", "olvídalo", "no hagas nada", "déjalo así").
+6. "AUDIT_QUERY": El usuario pregunta quién realizó una acción o qué cambios se hicieron históricamente ("¿Quién creó la clase Producto?", "¿Quién modificó el atributo stock?", "¿Qué cambios hizo Juan hoy?", "¿Quién borró la relación entre Cliente y Factura?", "¿Qué cambios ha tenido la clase Usuario?", "¿Qué modificaciones se hicieron hoy en el proyecto?").
+   - DIRECTIVA DE AUTORÍA VS. MUTACIÓN: Si el mensaje del usuario pregunta quién realizó una acción o qué cambios se hicieron en el pasado, está ESTRICTAMENTE PROHIBIDO clasificarlo como DIRECT_ACTION ni asignar requires_mutation: true. No se está pidiendo crear ni modificar nada. Clasifica como AUDIT_QUERY con requires_mutation: false y resolved_goal indicando resolver la consulta mediante la herramienta query_diagram_audit_logs.
+   - DIRECTIVA DE SUGERENCIAS VS. AUDITORÍA: Si el usuario pregunta por recomendaciones futuras o asesoría de modelado (ej: "¿qué atributos me sugieres?", "¿qué atributos puedo colocar?", "¿cómo recomiendas modelar?"), clasifica como CONCEPTUAL_CONSULTATION. Si el usuario pregunta qué atributos fueron agregados, modificados o creados por alguien en el pasado (ej: "¿qué atributos agregó Juan?", "¿qué cambios se hicieron ayer?"), clasifica como AUDIT_QUERY.
+   - requires_mutation: false
+   - resolved_goal: La consulta histórica a resolver usando query_diagram_audit_logs.
+
+7. "DECLINE_OR_CANCEL": El usuario indica explícitamente cancelar, declinar o descartar la sugerencia o solicitud pendiente ("cancela eso", "olvídalo", "no hagas nada", "déjalo así").
    - requires_mutation: false
    - resolved_goal: "Cancelar la solicitud pendiente."
 
@@ -401,6 +409,15 @@ class SemanticIntentRouter:
                         requires_mutation=True,
                         raw_message=message,
                     )
+
+        if is_audit_query(message):
+            return SemanticTurnDecision(
+                category=SemanticCategory.AUDIT_QUERY,
+                reasoning="Consulta de auditoría histórica detectada por fallback.",
+                resolved_goal=message,
+                requires_mutation=False,
+                raw_message=message,
+            )
 
         is_question = "?" in message or "¿" in message
         has_advisory_keyword = any(

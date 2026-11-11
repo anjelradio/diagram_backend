@@ -17,6 +17,7 @@ from app.modules.assistant.application.ports.providers.ai_provider import (
 )
 from app.modules.assistant.application.services.planning.agent_intent import (
     classify_agent_intent,
+    is_audit_query,
     is_neon_sync_prompt,
     requires_mutation as intent_requires_mutation,
     requires_plan as intent_requires_plan,
@@ -128,7 +129,10 @@ class ActionPlanner:
         active_notion_task: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         """Crea un ExecutionPlan homogéneo para una solicitud directa de un solo paso."""
-        task_kind = kind or ("mutation" if (cls.requires_mutation(prompt) or is_neon_sync_prompt(prompt)) else "answer")
+        if is_audit_query(prompt):
+            task_kind = "answer"
+        else:
+            task_kind = kind or ("mutation" if (cls.requires_mutation(prompt) or is_neon_sync_prompt(prompt)) else "answer")
         plan = ExecutionPlan.create(
             goal=prompt.strip(),
             tasks=[

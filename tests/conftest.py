@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+import sys
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
@@ -72,10 +73,8 @@ def client_fixture(session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_current_user] = get_current_user_override
     app.state.agent_job_runner_factory = _NoopAgentJobRunner
 
-    # Python 3.14's default asyncio loop in the current test runtime does not wake
-    # when Starlette's AnyIO portal schedules work from the test thread. Use the
-    # already-installed uvloop backend so TestClient startup and lifespan complete.
-    with TestClient(app, backend_options={"use_uvloop": True}) as client:
+    backend_options = {"use_uvloop": True} if sys.platform != "win32" else {}
+    with TestClient(app, backend_options=backend_options) as client:
         yield client
 
     app.dependency_overrides.clear()

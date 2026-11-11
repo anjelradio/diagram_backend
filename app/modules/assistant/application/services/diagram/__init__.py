@@ -23,6 +23,9 @@ from app.modules.assistant.application.services.diagram.diagram_attribute_tools 
 from app.modules.assistant.application.services.diagram.diagram_class_tools import (
     DiagramClassTools,
 )
+from app.modules.assistant.application.services.diagram.diagram_audit_tools import (
+    DiagramAuditTools,
+)
 from app.modules.assistant.application.services.diagram.diagram_mutation_tools import (
     DiagramMutationTools,
 )
@@ -42,6 +45,7 @@ __all__ = [
     "CANONICAL_CARDINALITIES",
     "DIAGRAM_MUTATION_TOOL",
     "DiagramAttributeTools",
+    "DiagramAuditTools",
     "DiagramClassTools",
     "DiagramMutationTools",
     "DiagramReadTools",

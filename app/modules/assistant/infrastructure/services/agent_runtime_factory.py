@@ -8,8 +8,16 @@ from app.core.config import settings
 from app.core.dependencies import get_event_bus
 from app.modules.assistant.application.services.diagram import (
     AgentConversationTools,
+    DiagramAuditTools,
     DiagramMutationTools,
     DiagramReadTools,
+)
+from app.modules.assistant.application.services.audit import AuditQueryService
+from app.modules.collaboration.infrastructure.persistence.readers.sqlmodel_project_member_list_reader import (
+    SQLModelProjectMemberListReader,
+)
+from app.modules.diagram.infrastructure.persistence.repositories.sqlmodel_diagram_audit_log_repository import (
+    SQLModelDiagramAuditLogRepository,
 )
 from app.modules.assistant.application.services.execution import (
     AgentToolActorContext,
@@ -229,6 +237,20 @@ def build_process_agent_message_use_case(
         project_id=project_id,
         user_id=user_id,
         max_total_chars=4000,
+    ).register(tool_registry)
+
+    audit_repo = SQLModelDiagramAuditLogRepository(session)
+    member_list_reader = SQLModelProjectMemberListReader(session)
+    audit_query_service = AuditQueryService(
+        audit_repository=audit_repo,
+        member_reader=member_list_reader,
+        project_repository=project_repository,
+        author_name_reader=author_profile_reader,
+    )
+    DiagramAuditTools(
+        audit_query_service,
+        project_id=project_id,
+        user_id=user_id,
     ).register(tool_registry)
     def _provide_classes(proj_id: UUID) -> dict[str, str]:
         res = diagram_reader.search_elements(

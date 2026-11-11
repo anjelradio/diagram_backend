@@ -1013,7 +1013,9 @@ class PlanExecutor:
                 query_directive = (
                     "Esta tarea es de consulta de auditoría histórica. Consulta la bitácora mediante `query_diagram_audit_logs`. "
                     "NO modifiques el lienzo ni invoques herramientas de mutación (`apply_diagram_changes`). "
-                    "Agrupa los resultados por fecha y por clase, usando viñetas y listas indentadas SIN tablas markdown."
+                    "Agrupa los resultados por fecha y por clase, usando viñetas y listas indentadas SIN tablas markdown. "
+                    "Muestra siempre las horas en formato local según la zona horaria indicada en el resultado (por defecto 'hora de Bolivia', ej: '04:27:47, hora de Bolivia' o 'Se creó la clase Casa (04:27:47, hora de Bolivia)'), "
+                    "y NUNCA muestres fechas u horas en UTC ni timestamps técnicos crudos ni apliques conversiones duplicadas."
                 )
             elif is_notion_task and is_query_intent:
                 query_directive = (
@@ -2223,6 +2225,8 @@ def _confirmed_tool_result(
 
     if tool_name in {"search_diagram_elements", "inspect_diagram_state"}:
         return result if result.get("status") == "ok" else None
+    if tool_name == "query_diagram_audit_logs":
+        return result if result.get("status") == "success" else None
     if tool_name == "get_diagram_element":
         if result.get("error_code") or not {"type", "id", "detail"} <= result.keys():
             return None

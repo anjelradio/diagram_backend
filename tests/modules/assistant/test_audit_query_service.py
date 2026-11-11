@@ -79,24 +79,179 @@ class FakeMemberReader(ProjectMemberListReader):
         return self.members
 
 
-def test_time_range_resolution():
+def test_time_range_resolution_default_bolivia():
+    # 15:30 UTC = 11:30 Bolivia (America/La_Paz, UTC-4)
     ref_time = datetime(2026, 11, 10, 15, 30, 0, tzinfo=timezone.utc)
 
-    # Hoy
+    # Hoy en Bolivia (2026-11-10 00:00:00-04:00 -> 2026-11-10 04:00:00 UTC)
     tr_today = AuditQueryService.resolve_time_range("today", reference_time=ref_time)
-    assert tr_today.since == datetime(2026, 11, 10, 0, 0, 0, tzinfo=timezone.utc)
+    assert tr_today.since == datetime(2026, 11, 10, 4, 0, 0, tzinfo=timezone.utc)
     assert tr_today.until == ref_time
     assert tr_today.label == "hoy"
+    assert tr_today.timezone == "America/La_Paz"
 
-    # Ayer
+    # Ayer en Bolivia (2026-11-09 00:00:00-04:00 -> 2026-11-09 04:00:00 UTC)
     tr_yesterday = AuditQueryService.resolve_time_range("ayer", reference_time=ref_time)
-    assert tr_yesterday.since == datetime(2026, 11, 9, 0, 0, 0, tzinfo=timezone.utc)
+    assert tr_yesterday.since == datetime(2026, 11, 9, 4, 0, 0, tzinfo=timezone.utc)
+    assert tr_yesterday.until == datetime(2026, 11, 10, 3, 59, 59, 999999, tzinfo=timezone.utc)
     assert tr_yesterday.label == "ayer"
 
-    # Fecha exacta
+    # Anteayer en Bolivia (2026-11-08 00:00:00-04:00 -> 2026-11-08 04:00:00 UTC)
+    tr_day_before = AuditQueryService.resolve_time_range("anteayer", reference_time=ref_time)
+    assert tr_day_before.since == datetime(2026, 11, 8, 4, 0, 0, tzinfo=timezone.utc)
+    assert tr_day_before.until == datetime(2026, 11, 9, 3, 59, 59, 999999, tzinfo=timezone.utc)
+    assert tr_day_before.label == "anteayer"
+
+    # Fecha exacta (2026-11-05 00:00:00-04:00 -> 2026-11-05 04:00:00 UTC)
     tr_exact = AuditQueryService.resolve_time_range(exact_date="2026-11-05")
-    assert tr_exact.since == datetime(2026, 11, 5, 0, 0, 0, tzinfo=timezone.utc)
+    assert tr_exact.since == datetime(2026, 11, 5, 4, 0, 0, tzinfo=timezone.utc)
+    assert tr_exact.until == datetime(2026, 11, 6, 3, 59, 59, 999999, tzinfo=timezone.utc)
     assert tr_exact.label == "el 2026-11-05"
+
+
+def test_time_range_resolution_custom_timezone():
+    ref_time = datetime(2026, 11, 10, 15, 30, 0, tzinfo=timezone.utc)
+
+    # Configuración de zona horaria por usuario a UTC
+    tr_utc = AuditQueryService.resolve_time_range(
+        "today", reference_time=ref_time, user_timezone="UTC"
+    )
+    assert tr_utc.since == datetime(2026, 11, 10, 0, 0, 0, tzinfo=timezone.utc)
+    assert tr_utc.until == ref_time
+    assert tr_utc.timezone == "UTC"
+
+
+def test_midnight_date_shift_between_utc_and_bolivia():
+    """Prueba de eventos próximos a medianoche y cambio de fecha entre UTC y Bolivia.
+    
+    A las 02:00:00 UTC del 11 de Noviembre:
+    En Bolivia (UTC-4) son las 22:00:00 del 10 de Noviembre.
+    Por tanto, para un usuario en Bolivia 'hoy' es el 10 de Noviembre.
+    """
+    proj_id = uuid.uuid4()
+    class_id = uuid.uuid4()
+
+    # ref_time: 2026-11-11 02:00:00 UTC (10 de Noviembre 22:00 Bolivia)
+    ref_time = datetime(2026, 11, 11, 2, 0, 0, tzinfo=timezone.utc)
+
+    # Evento 1: Creado a las 2026-11-11 01:30:00 UTC (2026-11-10 21:30:00 Bolivia -> 'hoy')
+    log_today = DiagramAuditLog.record(
+        project_id=proj_id,
+        user_id="usr-carlos",
+        user_name="Carlos Mendoza",
+        actor_type=DiagramAuditActorType.USER,
+        entity_type=DiagramAuditEntityType.CLASS,
+        entity_id=class_id,
+        entity_name="Casa",
+        action=DiagramAuditAction.CREATE,
+        use_case="CREATE_CLASS",
+        summary="Se creó la clase 'Casa'",
+        payload_after={"id": str(class_id), "name": "Casa"},
+        created_date=datetime(2026, 11, 11, 1, 30, 0, tzinfo=timezone.utc),
+    )
+
+    # Evento 2: Creado a las 2026-11-10 02:30:00 UTC (2026-11-09 22:30:00 Bolivia -> 'ayer')
+    log_yesterday = DiagramAuditLog.record(
+        project_id=proj_id,
+        user_id="usr-carlos",
+        user_name="Carlos Mendoza",
+        actor_type=DiagramAuditActorType.USER,
+        entity_type=DiagramAuditEntityType.CLASS,
+        entity_id=class_id,
+        entity_name="Edificio",
+        action=DiagramAuditAction.CREATE,
+        use_case="CREATE_CLASS",
+        summary="Se creó la clase 'Edificio'",
+        payload_after={"id": str(class_id), "name": "Edificio"},
+        created_date=datetime(2026, 11, 10, 2, 30, 0, tzinfo=timezone.utc),
+    )
+
+    service = AuditQueryService(audit_repository=FakeAuditRepo([log_today, log_yesterday]))
+
+    # Consulta 'hoy' desde Bolivia a las 22:00 del 10 de nov
+    result_today = service.execute_query(
+        project_id=proj_id,
+        time_filter="today",
+        reference_time=ref_time,
+    )
+    # Solo debe incluir el evento de hoy (Casa)
+    assert result_today.total_events == 1
+    assert result_today.events[0]["entity_name"] == "Casa"
+    # Debe estar agrupado bajo el día local de Bolivia: 2026-11-10
+    assert "2026-11-10" in result_today.grouped_by_date
+    assert "2026-11-11" not in result_today.grouped_by_date
+
+    # Consulta 'ayer' desde Bolivia a las 22:00 del 10 de nov
+    result_yesterday = service.execute_query(
+        project_id=proj_id,
+        time_filter="ayer",
+        reference_time=ref_time,
+    )
+    # Solo debe incluir el evento de ayer (Edificio)
+    assert result_yesterday.total_events == 1
+    assert result_yesterday.events[0]["entity_name"] == "Edificio"
+    assert "2026-11-09" in result_yesterday.grouped_by_date
+
+
+def test_midnight_local_time_formatting_and_grouping():
+    """Valida formato de horas local y asignación estricta de días cerca de medianoche."""
+    proj_id = uuid.uuid4()
+    class_id = uuid.uuid4()
+
+    # Evento A: 23:59:47 Bolivia -> 2026-11-11 03:59:47 UTC
+    log_before_midnight = DiagramAuditLog.record(
+        project_id=proj_id,
+        user_id="usr-ana",
+        user_name="Ana Lopez",
+        actor_type=DiagramAuditActorType.USER,
+        entity_type=DiagramAuditEntityType.CLASS,
+        entity_id=class_id,
+        entity_name="Casa",
+        action=DiagramAuditAction.CREATE,
+        use_case="CREATE_CLASS",
+        summary="Se creó la clase Casa",
+        payload_after={"id": str(class_id), "name": "Casa"},
+        created_date=datetime(2026, 11, 11, 3, 59, 47, tzinfo=timezone.utc),
+    )
+
+    # Evento B: 00:00:15 Bolivia -> 2026-11-11 04:00:15 UTC
+    log_after_midnight = DiagramAuditLog.record(
+        project_id=proj_id,
+        user_id="usr-ana",
+        user_name="Ana Lopez",
+        actor_type=DiagramAuditActorType.USER,
+        entity_type=DiagramAuditEntityType.CLASS,
+        entity_id=class_id,
+        entity_name="Vehiculo",
+        action=DiagramAuditAction.CREATE,
+        use_case="CREATE_CLASS",
+        summary="Se creó la clase Vehiculo",
+        payload_after={"id": str(class_id), "name": "Vehiculo"},
+        created_date=datetime(2026, 11, 11, 4, 0, 15, tzinfo=timezone.utc),
+    )
+
+    service = AuditQueryService(
+        audit_repository=FakeAuditRepo([log_before_midnight, log_after_midnight])
+    )
+    result = service.execute_query(project_id=proj_id)
+
+    assert result.total_events == 2
+    assert result.timezone == "America/La_Paz"
+    assert result.timezone_label == "hora de Bolivia"
+
+    # Evento A pertenece al 10 de noviembre en Bolivia a las 23:59:47
+    assert "2026-11-10" in result.grouped_by_date
+    event_a = result.grouped_by_date["2026-11-10"]["Casa"][0]
+    assert event_a["local_time"] == "23:59:47"
+    assert event_a["local_time_display"] == "23:59:47, hora de Bolivia"
+    assert event_a["formatted_event"] == "Se creó la clase Casa (23:59:47, hora de Bolivia)"
+
+    # Evento B pertenece al 11 de noviembre en Bolivia a las 00:00:15
+    assert "2026-11-11" in result.grouped_by_date
+    event_b = result.grouped_by_date["2026-11-11"]["Vehiculo"][0]
+    assert event_b["local_time"] == "00:00:15"
+    assert event_b["local_time_display"] == "00:00:15, hora de Bolivia"
+    assert event_b["formatted_event"] == "Se creó la clase Vehiculo (00:00:15, hora de Bolivia)"
 
 
 def test_collaborator_resolution():

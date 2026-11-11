@@ -41,10 +41,12 @@ class DiagramAuditTools:
         *,
         project_id: UUID,
         user_id: str,
+        user_timezone: str | None = None,
     ) -> None:
         self.audit_query_service = audit_query_service
         self.project_id = project_id
         self.user_id = user_id
+        self.user_timezone = user_timezone or "America/La_Paz"
 
     def register(self, registry: ToolRegistry) -> None:
         registry.register(
@@ -89,6 +91,10 @@ class DiagramAuditTools:
                                 "type": "string",
                                 "description": "Fecha específica en formato YYYY-MM-DD.",
                             },
+                            "timezone": {
+                                "type": "string",
+                                "description": "Zona horaria del usuario para interpretar fechas relativas y presentar horas (ej: 'America/La_Paz'). Por defecto 'America/La_Paz'.",
+                            },
                             "limit": {
                                 "type": "integer",
                                 "minimum": 1,
@@ -119,6 +125,7 @@ class DiagramAuditTools:
             "action",
             "time_filter",
             "exact_date",
+            "timezone",
             "limit",
         }
         if set(arguments) - allowed_keys:
@@ -158,6 +165,11 @@ class DiagramAuditTools:
         if exact_date is not None and not isinstance(exact_date, str):
             raise AgentToolArgumentsException()
 
+        tz_arg = arguments.get("timezone")
+        if tz_arg is not None and not isinstance(tz_arg, str):
+            raise AgentToolArgumentsException()
+        target_timezone = tz_arg or self.user_timezone
+
         limit = arguments.get("limit", 50)
         if not isinstance(limit, int) or limit < 1 or limit > 100:
             raise AgentToolArgumentsException()
@@ -172,12 +184,15 @@ class DiagramAuditTools:
             time_filter=time_filter,
             exact_date=exact_date,
             limit=limit,
+            user_timezone=target_timezone,
         )
 
         response: dict[str, Any] = {
             "status": "success",
             "total_events": result.total_events,
             "time_range": result.time_range_label,
+            "timezone": result.timezone,
+            "timezone_label": result.timezone_label,
             "collaborators_matched": result.collaborators_matched,
             "grouped_by_date": result.grouped_by_date,
             "events_sample": result.events[:15],

@@ -246,11 +246,13 @@ def build_process_agent_message_use_case(
         member_reader=member_list_reader,
         project_repository=project_repository,
         author_name_reader=author_profile_reader,
+        default_timezone="America/La_Paz",
     )
     DiagramAuditTools(
         audit_query_service,
         project_id=project_id,
         user_id=user_id,
+        user_timezone="America/La_Paz",
     ).register(tool_registry)
     def _provide_classes(proj_id: UUID) -> dict[str, str]:
         res = diagram_reader.search_elements(

@@ -8,6 +8,7 @@ import logging
 import re
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from app.modules.collaboration.application.ports.readers.project_member_list_reader import (
     ProjectMemberListReader,
@@ -30,6 +31,32 @@ from app.modules.assistant.application.ports.agent_author_name_reader import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TIMEZONE = "America/La_Paz"
+
+
+def resolve_timezone(tz: str | ZoneInfo | None) -> ZoneInfo:
+    """Resuelve la zona horaria objetivo, con fallback predeterminado a America/La_Paz."""
+    if tz is None:
+        return ZoneInfo(DEFAULT_TIMEZONE)
+    if isinstance(tz, ZoneInfo):
+        return tz
+    try:
+        return ZoneInfo(str(tz).strip())
+    except Exception:
+        logger.warning("Zona horaria inválida: %r, usando %s por defecto", tz, DEFAULT_TIMEZONE)
+        return ZoneInfo(DEFAULT_TIMEZONE)
+
+
+def get_timezone_label(tz: ZoneInfo | str) -> str:
+    """Devuelve una etiqueta legible en español para la zona horaria."""
+    tz_key = tz.key if isinstance(tz, ZoneInfo) else str(tz)
+    if tz_key == "America/La_Paz":
+        return "hora de Bolivia"
+    if tz_key.upper() in ("UTC", "ETC/UTC"):
+        return "hora UTC"
+    city = tz_key.split("/")[-1].replace("_", " ")
+    return f"hora de {city}"
+
 
 @dataclass(frozen=True, slots=True)
 class CollaboratorMatch:
@@ -44,6 +71,7 @@ class TimeRange:
     since: datetime | None
     until: datetime | None
     label: str
+    timezone: str = DEFAULT_TIMEZONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +97,8 @@ class AuditQueryResult:
     collaborators_matched: list[str]
     time_range_label: str
     events: list[dict[str, Any]]
+    timezone: str = DEFAULT_TIMEZONE
+    timezone_label: str = "hora de Bolivia"
     is_ambiguous_collaborator: bool = False
     ambiguity_message: str | None = None
 
@@ -82,11 +112,13 @@ class AuditQueryService:
         member_reader: ProjectMemberListReader | None = None,
         project_repository: ProjectRepository | None = None,
         author_name_reader: AgentAuthorNameReader | None = None,
+        default_timezone: str = DEFAULT_TIMEZONE,
     ) -> None:
         self.audit_repository = audit_repository
         self.member_reader = member_reader
         self.project_repository = project_repository
         self.author_name_reader = author_name_reader
+        self.default_timezone = default_timezone
 
     def resolve_collaborators(
         self,
@@ -145,57 +177,87 @@ class AuditQueryService:
 
         return list(candidates.values())
 
-    @staticmethod
+    @classmethod
     def resolve_time_range(
+        cls,
         time_filter: str | None = None,
         exact_date: str | None = None,
         reference_time: datetime | None = None,
+        user_timezone: str | ZoneInfo | None = None,
     ) -> TimeRange:
-        """Calcula los límites temporales UTC según el filtro o fecha exacta."""
-        now = reference_time or datetime.now(timezone.utc)
-        today = now.date()
+        """Calcula los límites temporales UTC según el filtro o fecha exacta evaluados en la zona horaria local."""
+        tz = resolve_timezone(user_timezone)
+
+        if reference_time is not None:
+            if reference_time.tzinfo is None:
+                ref_utc = reference_time.replace(tzinfo=timezone.utc)
+            else:
+                ref_utc = reference_time.astimezone(timezone.utc)
+            now_local = ref_utc.astimezone(tz)
+        else:
+            now_local = datetime.now(tz)
+            ref_utc = now_local.astimezone(timezone.utc)
+
+        today_local = now_local.date()
 
         if exact_date and exact_date.strip():
             raw_date = exact_date.strip()
             # Validar formato ISO YYYY-MM-DD
             try:
                 parsed_date = date.fromisoformat(raw_date)
-                since = datetime.combine(parsed_date, time.min, tzinfo=timezone.utc)
-                until = datetime.combine(parsed_date, time.max, tzinfo=timezone.utc)
-                return TimeRange(since=since, until=until, label=f"el {parsed_date.isoformat()}")
+                start_local = datetime.combine(parsed_date, time.min).replace(tzinfo=tz)
+                end_local = datetime.combine(parsed_date, time.max).replace(tzinfo=tz)
+                since_utc = start_local.astimezone(timezone.utc)
+                until_utc = end_local.astimezone(timezone.utc)
+                return TimeRange(
+                    since=since_utc,
+                    until=until_utc,
+                    label=f"el {parsed_date.isoformat()}",
+                    timezone=tz.key,
+                )
             except ValueError:
                 logger.warning("Fecha exacta inválida: %r", exact_date)
 
         if not time_filter or not time_filter.strip():
-            return TimeRange(since=None, until=None, label="histórico")
+            return TimeRange(since=None, until=None, label="histórico", timezone=tz.key)
 
         clean_filter = time_filter.strip().casefold()
 
         if clean_filter in ("today", "hoy"):
-            since = datetime.combine(today, time.min, tzinfo=timezone.utc)
-            return TimeRange(since=since, until=now, label="hoy")
+            start_local = datetime.combine(today_local, time.min).replace(tzinfo=tz)
+            since_utc = start_local.astimezone(timezone.utc)
+            until_utc = ref_utc
+            return TimeRange(since=since_utc, until=until_utc, label="hoy", timezone=tz.key)
 
         if clean_filter in ("yesterday", "ayer"):
-            yesterday = today - timedelta(days=1)
-            since = datetime.combine(yesterday, time.min, tzinfo=timezone.utc)
-            until = datetime.combine(yesterday, time.max, tzinfo=timezone.utc)
-            return TimeRange(since=since, until=until, label="ayer")
+            yesterday_local = today_local - timedelta(days=1)
+            start_local = datetime.combine(yesterday_local, time.min).replace(tzinfo=tz)
+            end_local = datetime.combine(yesterday_local, time.max).replace(tzinfo=tz)
+            since_utc = start_local.astimezone(timezone.utc)
+            until_utc = end_local.astimezone(timezone.utc)
+            return TimeRange(since=since_utc, until=until_utc, label="ayer", timezone=tz.key)
 
         if clean_filter in ("day_before_yesterday", "anteayer", "antes_de_ayer", "antes de ayer"):
-            day_before = today - timedelta(days=2)
-            since = datetime.combine(day_before, time.min, tzinfo=timezone.utc)
-            until = datetime.combine(day_before, time.max, tzinfo=timezone.utc)
-            return TimeRange(since=since, until=until, label="anteayer")
+            day_before_local = today_local - timedelta(days=2)
+            start_local = datetime.combine(day_before_local, time.min).replace(tzinfo=tz)
+            end_local = datetime.combine(day_before_local, time.max).replace(tzinfo=tz)
+            since_utc = start_local.astimezone(timezone.utc)
+            until_utc = end_local.astimezone(timezone.utc)
+            return TimeRange(since=since_utc, until=until_utc, label="anteayer", timezone=tz.key)
 
         if clean_filter in ("recent_days", "ultimos_dias", "últimos_días", "ultimos dias", "últimos días"):
-            since = datetime.combine(today - timedelta(days=5), time.min, tzinfo=timezone.utc)
-            return TimeRange(since=since, until=now, label="en los últimos días")
+            start_local = datetime.combine(today_local - timedelta(days=5), time.min).replace(tzinfo=tz)
+            since_utc = start_local.astimezone(timezone.utc)
+            until_utc = ref_utc
+            return TimeRange(since=since_utc, until=until_utc, label="en los últimos días", timezone=tz.key)
 
         if clean_filter in ("this_week", "esta_semana", "esta semana", "semana"):
-            since = datetime.combine(today - timedelta(days=7), time.min, tzinfo=timezone.utc)
-            return TimeRange(since=since, until=now, label="esta semana")
+            start_local = datetime.combine(today_local - timedelta(days=7), time.min).replace(tzinfo=tz)
+            since_utc = start_local.astimezone(timezone.utc)
+            until_utc = ref_utc
+            return TimeRange(since=since_utc, until=until_utc, label="esta semana", timezone=tz.key)
 
-        return TimeRange(since=None, until=None, label="histórico")
+        return TimeRange(since=None, until=None, label="histórico", timezone=tz.key)
 
     def execute_query(
         self,
@@ -210,13 +272,18 @@ class AuditQueryService:
         exact_date: str | None = None,
         limit: int = 50,
         reference_time: datetime | None = None,
+        user_timezone: str | ZoneInfo | None = None,
     ) -> AuditQueryResult:
-        """Ejecuta la consulta con desambiguación de colaboradores y rango temporal."""
-        # 1. Resolver temporalidad
+        """Ejecuta la consulta con desambiguación de colaboradores, rango temporal y conversión de zona horaria."""
+        active_tz = resolve_timezone(user_timezone or self.default_timezone)
+        tz_label = get_timezone_label(active_tz)
+
+        # 1. Resolver temporalidad en zona horaria local (límites convertidos a UTC para DB)
         time_range = self.resolve_time_range(
             time_filter=time_filter,
             exact_date=exact_date,
             reference_time=reference_time,
+            user_timezone=active_tz,
         )
 
         # 2. Resolver colaborador
@@ -274,23 +341,41 @@ class AuditQueryService:
             limit=limit,
         )
 
-        # 5. Agrupación jerárquica
-        # Nivel 1: Fecha (YYYY-MM-DD)
+        # 5. Agrupación jerárquica con conversión a zona horaria local
+        # Nivel 1: Fecha local (YYYY-MM-DD)
         # Nivel 2: Clase contenedora o propia (parent_class_name o entity_name)
-        # Nivel 3: Lista de eventos detallados
+        # Nivel 3: Lista de eventos detallados con horas locales
         grouped_by_date: dict[str, dict[str, list[dict[str, Any]]]] = {}
         flat_events: list[dict[str, Any]] = []
 
         for log in logs:
-            event_date = (
-                log.created_date.strftime("%Y-%m-%d")
-                if log.created_date
-                else "Fecha desconocida"
-            )
+            if log.created_date:
+                dt = log.created_date
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                local_dt = dt.astimezone(active_tz)
+                event_date = local_dt.strftime("%Y-%m-%d")
+                local_time_str = local_dt.strftime("%H:%M:%S")
+                local_time_display = f"{local_time_str}, {tz_label}"
+                created_date_iso = local_dt.isoformat()
+                created_date_utc_iso = dt.astimezone(timezone.utc).isoformat()
+            else:
+                event_date = "Fecha desconocida"
+                local_time_str = ""
+                local_time_display = ""
+                created_date_iso = ""
+                created_date_utc_iso = ""
+
             # Determinar clase de agrupación
             target_class = (
                 log.parent_class_name
                 or (log.entity_name if log.entity_type == DiagramAuditEntityType.CLASS else "General")
+            )
+
+            formatted_event = (
+                f"{log.summary} ({local_time_display})"
+                if local_time_display and log.summary
+                else (log.summary or "")
             )
 
             event_dict: dict[str, Any] = {
@@ -304,7 +389,13 @@ class AuditQueryService:
                 "parent_class_name": log.parent_class_name,
                 "use_case": log.use_case,
                 "summary": log.summary,
-                "created_date": log.created_date.isoformat() if log.created_date else "",
+                "local_time": local_time_str,
+                "local_time_display": local_time_display,
+                "formatted_event": formatted_event,
+                "created_date": created_date_iso,
+                "created_date_utc": created_date_utc_iso,
+                "timezone": active_tz.key,
+                "timezone_label": tz_label,
                 "payload_before": log.payload_before,
                 "payload_after": log.payload_after,
             }
@@ -324,6 +415,8 @@ class AuditQueryService:
             collaborators_matched=matched_names,
             time_range_label=time_range.label,
             events=flat_events,
+            timezone=active_tz.key,
+            timezone_label=tz_label,
             is_ambiguous_collaborator=is_ambiguous,
             ambiguity_message=ambiguity_msg,
         )

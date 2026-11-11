@@ -375,3 +375,50 @@ async def test_agent_flow_query_what_collaborator_did_today():
     assert "Pedido" in result.text
     assert "monto" in result.text
     assert len(plan.operation_ledger) == 0
+
+
+@pytest.mark.anyio
+async def test_diagram_audit_tools_local_timezone_and_custom_override():
+    """Valida que query_diagram_audit_logs retorne horas locales de Bolivia y admita override de zona horaria."""
+    proj_id = uuid4()
+    class_id = uuid4()
+
+    # Evento creado a las 08:27:47 UTC (04:27:47 en Bolivia, UTC-4)
+    event_dt = datetime(2026, 11, 11, 8, 27, 47, tzinfo=timezone.utc)
+    log_entry = DiagramAuditLog.record(
+        project_id=proj_id,
+        user_id="usr-1",
+        user_name="Luciana",
+        actor_type=DiagramAuditActorType.USER,
+        entity_type=DiagramAuditEntityType.CLASS,
+        entity_id=class_id,
+        entity_name="Casa",
+        action=DiagramAuditAction.CREATE,
+        use_case="CREATE_CLASS",
+        summary="Se creó la clase Casa",
+        payload_after={"id": str(class_id), "name": "Casa"},
+        created_date=event_dt,
+    )
+
+    audit_repo = InMemoryAuditRepo([log_entry])
+    audit_service = AuditQueryService(audit_repository=audit_repo)
+    tools = DiagramAuditTools(audit_service, project_id=proj_id, user_id="usr-1")
+
+    # 1. Consulta predeterminada (America/La_Paz)
+    res_bolivia = await tools._query_audit_logs({"entity_name": "Casa"})
+    assert res_bolivia["status"] == "success"
+    assert res_bolivia["timezone"] == "America/La_Paz"
+    assert res_bolivia["timezone_label"] == "hora de Bolivia"
+    sample = res_bolivia["events_sample"][0]
+    assert sample["local_time"] == "04:27:47"
+    assert sample["local_time_display"] == "04:27:47, hora de Bolivia"
+    assert sample["formatted_event"] == "Se creó la clase Casa (04:27:47, hora de Bolivia)"
+
+    # 2. Consulta con override de zona horaria (UTC)
+    res_utc = await tools._query_audit_logs({"entity_name": "Casa", "timezone": "UTC"})
+    assert res_utc["status"] == "success"
+    assert res_utc["timezone"] == "UTC"
+    assert res_utc["timezone_label"] == "hora UTC"
+    sample_utc = res_utc["events_sample"][0]
+    assert sample_utc["local_time"] == "08:27:47"
+    assert sample_utc["local_time_display"] == "08:27:47, hora UTC"
